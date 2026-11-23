@@ -7,6 +7,14 @@
 - [Pull requests](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/pulls)
 - [Live lease files](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/tree/swarm-state/coordination/leases)
 
+## Little Ray design intake
+
+Little Ray GDD v1.0 is **received**. Read the [full GDD](design/GDD.md), [source record and original](design/SOURCE.md), [design baseline](design/DESIGN_BASELINE.md), and [first-slice assignments](design/FIRST_SLICE.md). DIRECTOR-001 owns intake; the individual issue records its review/integration status.
+
+The next scoped tasks are ARCH-002 [#9](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/9), ART-002 [#10](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/10), ART-003 [#11](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/11), GAMEPLAY-002 [#12](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/12), GAMEPLAY-003 [#13](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/13), and QA-002 [#14](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/14). Their issue bodies own status and dependencies. They initially wait on the named role capability evidence and preceding slice work.
+
+The phase remains `bootstrap` until production tasks are Ready. Existing capability work can proceed now. Hourly registration and scheduled-run verification remain separately recorded; neither is a new permission gate for authorized interactive work.
+
 ## Startup assignments
 
 These are the initial assignments. Each linked issue is authoritative for its current status, owner, dependencies, evidence, and next action.

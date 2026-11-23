@@ -3,9 +3,9 @@
   "repository": "hazelfjeld/Swarm-Autonomous-Game-Design",
   "phase": "bootstrap",
   "gdd": {
-    "status": "awaiting",
-    "path": null,
-    "source_path": null
+    "status": "received",
+    "path": "docs/design/GDD.md",
+    "source_path": "docs/design/source/Little_Ray_GDD_v1.0.docx"
   },
   "roles": {
     "director": {"path": "roles/director.md", "prompt_path": "prompts/director.md", "schedule_minute": 0},
@@ -35,6 +35,6 @@
     "role_issue_numbers": {"director": 3, "architect": 4, "gameplay": 5, "art-audio": 6, "qa": 7}
   },
   "milestones": [
-    {"id": "M0", "issue_number": 8, "title": "First GDD-derived design-build-review cycle", "status": "awaiting_gdd"}
+    {"id": "M0", "issue_number": 8, "title": "First GDD-derived design-build-review cycle", "status": "awaiting_capability_checks"}
   ]
 }

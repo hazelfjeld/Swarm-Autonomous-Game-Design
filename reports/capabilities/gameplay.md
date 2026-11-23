@@ -5,7 +5,7 @@
 - Interactive assessment date: 2026-11-23 UTC.
 - Input commit: `08beacae99ea23394438cb2f61f8e7772b6ac47e`.
 - Task branch: `swarm/gameplay/GAMEPLAY-001`.
-- Result at this checkpoint: available setup and headless coding checks passed; durable branch recovery remains to be exercised before review handoff.
+- Result: interactive setup/coding checks and durable branch recovery passed; submitted through [PR #18](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/pull/18) for independent review and architect integration. Hourly registration succeeded; first scheduled execution remains unverified.
 
 ## Deliverable and readiness
 
@@ -31,7 +31,7 @@ No source retrieval failed. No installed copy was claimed equivalent; no skill i
 | Isolated checkout | Created an independent clone without shared object hard links, set the explicit repository remote, and fetched current `main` successfully. Checked out the exact input commit before creating the stable task branch. | A public fetch does not establish authenticated Git push access. |
 | Git | `git --version`: `2.56.1`. | CLI push has not been exercised. Task writes use the connected GitHub API. |
 | GitHub CLI | `gh --version`: `2.46.0`; `gh auth status` returned exit 1 and reported no logged-in hosts. | `swarm_lease.py acquire` returned `api_error`; this is not evidence of an acquired CLI lease. |
-| Authenticated connector | Fresh read after the CLI failure confirmed an unowned generation-0 lease. Connector content-SHA acquisition succeeded at [commit ab9e448](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/commit/ab9e448e0902559e504c0e54823ccb05413ceb8c); readback confirmed this run and generation 1. The connector also changed #5 from Ready to Working. | Cooperative lease assertions remain required before mutations. No enforcement beyond the documented protocol is claimed. |
+| Authenticated connector | Fresh read after the CLI failure confirmed an unowned generation-0 lease. Connector content-SHA acquisition succeeded at [commit ab9e448](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/commit/ab9e448e0902559e504c0e54823ccb05413ceb8c); readback confirmed this run and generation 1. The connector changed #5 from Ready to Working and created the task tree, checkpoint commit, stable remote branch and PR #18. | Cooperative lease assertions remain required before mutations. No enforcement beyond the documented protocol is claimed. |
 | Python | `python3 --version`: `3.12.14`. | Observed interactive runtime only. |
 | Godot | `godot --version`: `4.7.2.stable.official.ed1daf0bf`; `godot4` reports the same. | Installed editor observation, not an accepted project pin or matching-template verification. |
 | Coding and diagnostics | A generic GDScript file executed headlessly and round-tripped JSON; a deliberately invalid disposable script produced a specific parser diagnostic and nonzero exit. | No visual debugger, breakpoint session, rendered game, player input or browser interaction was exercised. |
@@ -54,25 +54,36 @@ Initial checks ran against the stated input commit plus the two listed probe fil
 
 Evidence levels: static repository inspection and automated/headless execution completed. A Little Ray build, hosted interaction, touch/audio behavior, save/import behavior and human playtesting were not performed. JSON serialization in this generic probe is not verification of the game's save contract.
 
-## Durable interruption checkpoint
+## Executed interruption and recovery exercise
 
-This is the first checkpoint, to be committed on `swarm/gameplay/GAMEPLAY-001` and linked to one draft PR. Recovery must use that same branch and PR.
+1. Published checkpoint [5245ae5](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/commit/5245ae5a2cc467b9e8e22e0d1c92f6e83dd89c1e), tree `c0c55a2fb5bf175ec68ba5e87812b03acd9aae86`, on `swarm/gameplay/GAMEPLAY-001`. The published tree exactly matched the locally staged tree. Opened one draft PR, #18, and recorded its checkpoint and resume instructions in #5 before the exercise.
+2. Stopped using the first working copy. Ran `git clone --single-branch --branch swarm/gameplay/GAMEPLAY-001 https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design.git <fresh-directory>`. This downloaded the remote branch into a separate checkout; it did not copy files from the original worktree.
+3. Verified `git rev-parse HEAD` equals `5245ae5a2cc467b9e8e22e0d1c92f6e83dd89c1e`, `git branch --show-current` equals the same stable task branch, and `git status --porcelain` is empty. Re-read #5 and the exact-head PR list, which contained only PR #18, and reasserted this run's live generation-1 lease.
+4. From the recovered checkout, reran `python3 scripts/validate_setup.py`, `python3 -m unittest discover -s tests -v`, and the retained Godot headless probe. All returned exit 0; 29 tests passed; the probe emitted the expected JSON with empty stderr. Probe file SHA-256 values matched the initial record, and the worktree remained clean afterward.
+5. Resumed the report on this same branch and PR. Detailed recovery checks, timestamps, exact checkpoint and hashes are retained in [resume_checks.json](gameplay_evidence/resume_checks.json).
 
-1. Preserve the published checkpoint SHA and PR number in the canonical task record.
-2. Stop using this working copy. Obtain a fresh clone of the exact remote task branch; verify HEAD equals the recorded checkpoint and the tracked worktree is clean.
-3. Reassert this run's still-live lease, re-read the task and existing PR, and resume the same task. If the lease has expired or changed, stop and reconcile through the normal acquisition rules.
-4. Run the existing setup checks and retained headless probe from the fresh checkout. Record the exact checkpoint, commands and outcomes here; update the same PR rather than opening another.
-
-At this checkpoint the recovery exercise is pending, not passed. The simulation verifies recovery from committed remote artifacts; it will not establish recovery of unsaved editor state or a future scheduler process.
+This simulates loss of the working copy using committed remote artifacts. It does not establish recovery of unsaved editor state, an expired/reassigned lease, a killed scheduler process or future runtime capabilities. The final submitted commit and checks are recorded in the issue/PR handoff without inventing a document's own future hash.
 
 ## Acceptance and next action
 
-- Completed so far: source and specification reads, live gameplay lease, setup checks, executable GDScript/diagnostic observations and isolated branch preparation.
-- Pending in this run: publish/recover the stable branch, finish the bounded PR, verify hourly registration and record its actual ID in #5.
+- Completed interactive assessment: source/specification reads, live gameplay lease, setup checks, GDScript/diagnostic observations, authenticated task branch/PR writes, clean remote-checkpoint recovery and verified hourly registration.
+- Acceptance outstanding: independent QA and architect review/integration of the submitted PR. This report is implementation evidence, not self-acceptance.
 - Review owner: QA for exact-version verification and architect for technical review/integration. Gameplay does not self-approve or merge.
 - Feature readiness owner: director, after the live dependencies and accepted interfaces for #12 are satisfied.
 - First scheduled run: separately unverified. The scheduled runtime must check its own actual tools; this interactive assessment cannot establish them.
 
 ## Automation registration
 
-The canonical registration is the actual service-returned ID in issue #5. At this checkpoint no gameplay automation has been created. The kickoff must inspect complete existing prompts and the registry while holding the lease, create or reuse exactly one matching task for this repository and role, and verify hourly `:20:00` in `America/Chicago` before claiming registration.
+The canonical registration is recorded in issue #5. The automation service confirmed creation and a subsequent complete inventory contained exactly one task matching this repository and role:
+
+- Actual task ID: `Automation_02184072e8a88191937b29385d78c6ca`.
+- Title: `Swarm Game — Gameplay Engineer`.
+- Repository / role: `https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design` / `gameplay`.
+- Created, enabled, exact schedule: every hour at `:20:00`, timezone `America/Chicago`.
+- Saved schedule: `DTSTART;TZID=America/Chicago:20261123T182000`; `RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=20;BYSECOND=0`.
+- Next occurrence returned at registration: `2026-11-23T18:20:00-06:00`.
+- Complete saved prompt: exact string match to the 7,609-character recurring block from `prompts/gameplay.md`, blob `5b446fa7a3d7bbd996454cbaf9d213220086ef38`.
+- Interactive startup: verified to the limits stated above.
+- First actual scheduled run: unverified; no previous run was returned. The recurring prompt requires fresh capability checks and prohibits automation edits during recurring runs.
+
+Before creation, the complete task inventory and startup registry showed no matching gameplay task. The live lease and registry were rechecked immediately before creation; unrelated schedules were unchanged.

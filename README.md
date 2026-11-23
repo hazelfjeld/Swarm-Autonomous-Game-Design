@@ -24,6 +24,7 @@ The schedules are launch instructions, not evidence that automations already exi
 ## What is included
 
 - Five role playbooks and five self-contained kickoff prompts.
+- Explicit, versioned [GitHub skill sources](docs/SKILL_SOURCES.md), loaded by both kickoff and recurring runs.
 - A shared [coordination protocol](docs/PROTOCOL.md), issue templates, PR template, and durable run-report template.
 - Per-role cooperative leases on the `swarm-state` branch, using compare-and-swap updates to avoid duplicate active runs.
 - A small Python helper and setup checks, with CI for the coordination files.
@@ -44,7 +45,7 @@ These commands check the experiment's setup. They do not establish that a game h
 
 The supplied GDD and accepted decisions define the game. GitHub Issues own task status and dependencies. Pull requests contain proposed changes. `config/experiment.json` records the experiment phase and canonical locations. Live leases exist only on `swarm-state`; do not merge that branch into `main`.
 
-The repository-local role instructions work without installing additional personal skills. Complete, relevant installed skills may supplement them; unfinished skill templates must not be treated as usable expertise.
+The [skill source manifest](config/skill_sources.json) binds each role to Hazel's actual GitHub skill sources. Kickoff and recurring runs read those sources and relevant modules at the recorded revision, and report what they loaded. No personal skill installation is required. The role playbooks define ownership and workflow; the GDD defines this game.
 
 ## Measure the experiment
 

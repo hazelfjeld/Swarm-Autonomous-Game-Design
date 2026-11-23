@@ -9,7 +9,7 @@
 
 ## Little Ray design intake
 
-Little Ray GDD v1.0 is **received**. Read the [full GDD](design/GDD.md), [source record and original](design/SOURCE.md), [design baseline](design/DESIGN_BASELINE.md), and [first-slice assignments](design/FIRST_SLICE.md). DIRECTOR-001 owns intake; the individual issue records its review/integration status.
+Little Ray GDD v1.0 is **received**. Read the [full GDD](design/GDD.md), [source record and original](design/SOURCE.md), [design baseline](design/DESIGN_BASELINE.md), and [first-slice assignments](design/FIRST_SLICE.md). DIRECTOR-001 is complete and closed after PR #15. Reuse the received working baseline; no original chat attachment or repeated intake is needed.
 
 The next scoped tasks are ARCH-002 [#9](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/9), ART-002 [#10](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/10), ART-003 [#11](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/11), GAMEPLAY-002 [#12](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/12), GAMEPLAY-003 [#13](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/13), and QA-002 [#14](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/14). Their issue bodies own status and dependencies. They initially wait on the named role capability evidence and preceding slice work.
 
@@ -21,13 +21,26 @@ These are the initial assignments. Each linked issue is authoritative for its cu
 
 | Role | Initial task | Initial status | Hourly kickoff |
 | --- | --- | --- | --- |
-| director | [DIRECTOR-001: import GDD and scope first slice](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/3) | Blocked awaiting GDD; capability/registration work can proceed | [Director prompt](../prompts/director.md), :00 |
+| director | [DIRECTOR-001: import GDD and scope first slice](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/3) | Done; continue coordination and dependency review | [Director prompt](../prompts/director.md), :00 |
 | architect | [ARCH-001: runtime and integration workflow](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/4) | Ready | [Architect prompt](../prompts/architect.md), :10 |
 | gameplay | [GAMEPLAY-001: implementation environment](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/5) | Ready | [Gameplay prompt](../prompts/gameplay.md), :20 |
 | art-audio | [ART-001: asset creation and delivery](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/6) | Ready | [Art/audio prompt](../prompts/art-audio.md), :30 |
 | qa | [QA-001: independent coordination verification](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/7) | Ready | [QA prompt](../prompts/qa.md), :40 |
 
 All cadences use America/Chicago. A scheduled minute is a wake-up time, not a dependency guarantee.
+
+## Skill loading
+
+All roles read [the versioned skill source manifest](../config/skill_sources.json) and [loading instructions](SKILL_SOURCES.md). The director uses Game Designer; the architect uses Technical Architect. Gameplay, art/audio, and QA use the mapped supporting modules and their own playbooks. Report the actual source revisions loaded, including any failed fetch.
+
+## Next dependency handoffs
+
+- Accepted ARCH-001 evidence unblocks existing ARCH-002 #9.
+- Accepted ART-001 evidence independently unblocks existing ART-002 #10.
+- ART-003 #11 needs #9 and #10; GAMEPLAY-002 #12 needs #5 and #9.
+- GAMEPLAY-003 #13 needs #9, #11, and #12; QA-002 #14 needs #7 and #13.
+
+Keep these existing issues and their acceptance criteria. The issue bodies own current status; do not mark a dependency complete merely because the GDD was received or a skill loaded.
 
 ## Automation registry
 

@@ -2,14 +2,14 @@
 
 Five specialist ChatGPT instances collaborate through this repository: a game director, technical architect/integrator, gameplay engineer, art/audio creator, and independent QA evaluator.
 
-**Current phase: bootstrap. The game design document (GDD) is awaiting intake.** Infrastructure and capability checks can proceed; game-specific production starts from the supplied GDD and a director-owned, testable first milestone.
+**Little Ray GDD v1.0 is received. Current phase: bootstrap, pending role capability checks.** Read the [full design document](docs/design/GDD.md), [original illustrated Word document](docs/design/source/Little_Ray_GDD_v1.0.docx), [design baseline](docs/design/DESIGN_BASELINE.md), and [first playable slice](docs/design/FIRST_SLICE.md). The first production tasks have named prerequisites; their issue statuses determine readiness.
 
 ## Start here
 
 1. Read the [experiment brief](docs/EXPERIMENT.md) and [shared operating rules](AGENTS.md).
 2. Open the [message board and task index](docs/BOARD.md).
 3. Paste each [kickoff prompt](prompts/README.md) into its own ChatGPT conversation. Each prompt performs startup work and creates or reuses exactly one hourly task for its role.
-4. Supply the GDD using the [intake procedure](docs/GDD_INTAKE.md).
+4. Read the [Little Ray design baseline](docs/design/DESIGN_BASELINE.md), then the [first-slice assignments](docs/design/FIRST_SLICE.md). Future GDD versions follow the [intake procedure](docs/GDD_INTAKE.md).
 
 | Role | Instructions | Kickoff | Hourly minute, America/Chicago |
 | --- | --- | --- | --- |
@@ -27,6 +27,7 @@ The schedules are launch instructions, not evidence that automations already exi
 - A shared [coordination protocol](docs/PROTOCOL.md), issue templates, PR template, and durable run-report template.
 - Per-role cooperative leases on the `swarm-state` branch, using compare-and-swap updates to avoid duplicate active runs.
 - A small Python helper and setup checks, with CI for the coordination files.
+- The complete Little Ray GDD, preserved Word original and [source record](docs/design/SOURCE.md), with a bounded first-slice backlog.
 - A [GDD intake path](docs/GDD_INTAKE.md), an experiment record, and a [verification report](docs/SETUP_VERIFICATION.md).
 
 ## Local checks

@@ -13,7 +13,7 @@ Little Ray GDD v1.0 is **received**. Read the [full GDD](design/GDD.md), [source
 
 The next scoped tasks are ARCH-002 [#9](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/9), ART-002 [#10](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/10), ART-003 [#11](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/11), GAMEPLAY-002 [#12](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/12), GAMEPLAY-003 [#13](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/13), and QA-002 [#14](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/14). Their issue bodies own status and dependencies. They initially wait on the named role capability evidence and preceding slice work.
 
-The phase is `active`: ARCH-001 #4 is Done after PR #16, and the director's existing readiness decision makes ARCH-002 #9 Ready for its scoped delivery/save spike. Other issues retain their own live dependencies; M0 is not complete. Existing capability work can proceed. Hourly registration and scheduled-run verification remain separately recorded; neither is a new permission gate for authorized interactive work.
+The phase is `active`: ARCH-001 #4 is Done after PR #16, and ARCH-002 #9 has passed the director's production-readiness gate for its scoped delivery/save spike. Its live issue owns the current execution status. Other issues retain their own live dependencies; M0 is not complete. Existing capability work can proceed. Hourly registration and scheduled-run verification remain separately recorded; neither is a new permission gate for authorized interactive work.
 
 ## Startup assignments
 
@@ -35,7 +35,7 @@ All roles read [the versioned skill source manifest](../config/skill_sources.jso
 
 ## Next dependency handoffs
 
-- ARCH-001 evidence is accepted; existing ARCH-002 #9 is Ready for the architect. Export/templates, hosted runtime and persistence/backup observations remain its acceptance work.
+- ARCH-001 evidence is accepted; existing ARCH-002 #9 passed its dependency gate and belongs to the architect. Follow its live issue for execution status. Export/templates, hosted runtime and persistence/backup observations remain its acceptance work.
 - Accepted ART-001 evidence independently unblocks existing ART-002 #10.
 - ART-003 #11 needs #9 and #10; GAMEPLAY-002 #12 needs #5 and #9.
 - GAMEPLAY-003 #13 needs #9, #11, and #12; QA-002 #14 needs #7 and #13.

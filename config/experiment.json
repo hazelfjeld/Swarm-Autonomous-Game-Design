@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "repository": "hazelfjeld/Swarm-Autonomous-Game-Design",
-  "phase": "bootstrap",
+  "phase": "active",
   "gdd": {
     "status": "received",
     "path": "docs/design/GDD.md",

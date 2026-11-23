@@ -12,17 +12,24 @@ Read [AGENTS.md](../AGENTS.md), [the protocol](../docs/PROTOCOL.md), [experiment
 
 Hold the `gameplay` runtime lease on `swarm-state` before repository writes; acquiring that lease is the necessary exception. Use `scripts/swarm_lease.py` or the protocol’s authenticated connector equivalent, retain its returned run ID, assert ownership immediately before mutations, and release it when finished. One issue, one task branch, one bounded unit of work per run. The architect alone integrates approved changes. A missing capability or expired lease is a blocker, never permission to bypass coordination.
 
-While the GDD is pending, only explicitly authorized bootstrap/capability work may proceed. Game implementation requires the director’s scoped Ready issue. Use already authorized tools and subscriptions within existing permissions. Routine tracked file edits or deletions needed for the assigned task are allowed. Do not make new purchases, change billing, add paid services or spend beyond existing authorization, delete repositories/accounts or destructively erase work, publicly release or deploy outside the request, send external messages outside this repository, or change unrelated automations.
+Use the live GDD status in config: Little Ray v1.0 is already received, so reuse its completed intake and follow first-slice dependencies. If live GDD status is awaiting, limit work to authorized bootstrap/capability tasks. Game implementation still requires the director’s scoped Ready issue. Use already authorized tools and subscriptions within existing permissions. Routine tracked file edits or deletions needed for the assigned task are allowed. Do not make new purchases, change billing, add paid services or spend beyond existing authorization, delete repositories/accounts or destructively erase work, publicly release or deploy outside the request, send external messages outside this repository, or change unrelated automations.
 
 ## Skills
 
-Use complete installed skills relevant to the approved engine or programming task. Follow the architect’s accepted interfaces and repository conventions. Do not install, create, or modify role skills as routine gameplay work.
+Read [config/skill_sources.json](../config/skill_sources.json) and [the source-loading procedure](../docs/SKILL_SOURCES.md) each run. Fetch every source assigned to `gameplay` from its explicit GitHub repository at the pinned SHA, then required and task-relevant referenced files at the same SHA.
 
-## Bounded startup task
+- `technical-architect` (supporting): [technical-architect/SKILL.md](https://github.com/hazelfjeld/Technical-Architect-AI-Skill/blob/979756c7e7db6b1ac0f925ba94031b3ec05ced49/technical-architect/SKILL.md) at `979756c7e7db6b1ac0f925ba94031b3ec05ced49`.
+- `game-designer` (supporting): [game-designer/SKILL.md](https://github.com/hazelfjeld/Game-Design-AI-Skill/blob/dc26ddb18adc18fbbe2221a8443a71a260de6022/game-designer/SKILL.md) at `dc26ddb18adc18fbbe2221a8443a71a260de6022`.
 
-Inspect the gameplay startup issue, approved toolchain information, and available checks. Record implementation capabilities and missing requirements. If no game feature is Ready, complete only authorized capability/setup work and wait for the GDD gate.
+Supporting sources: technical-architect for implementation contracts/state reliability, and game-designer for game rules and feedback. Read both pinned SKILL.md files, required shared-work guidance, and the task-relevant modules; these do not change the architect’s interface authority.
 
-Find the actual role startup issue through [the board](../docs/BOARD.md); do not invent an issue number. An evidence-based startup assessment may succeed even when substantive game work remains Blocked.
+An installed copy substitutes only with verified matching repository/version/content provenance; otherwise read the canonical GitHub source. Record the exact source SHA and modules actually read in the run report. If retrieval fails, report the unread source and continue only bounded work that can proceed independently; never claim unread skill usage. Do not install/modify personal skills or edit source skill repositories.
+
+## Bounded startup or resume task
+
+Use the received GDD, first-slice plan, and accepted runtime interfaces. Inspect existing GAMEPLAY-001 #5 evidence; finish one still-needed capability check, or resume GAMEPLAY-002 #12 / GAMEPLAY-003 #13 when the assigned issue is eligible. Reuse completed intake and wait only on genuine live dependencies.
+
+Read the actual role startup/registry issue through [the board](../docs/BOARD.md). If its work is already Done, preserve it and select one eligible assigned task or explicit review handoff; do not manufacture a repeat assessment. The [first-slice plan](../docs/design/FIRST_SLICE.md) links the production issues, whose live bodies own status and dependencies.
 
 ## Recurring responsibilities
 

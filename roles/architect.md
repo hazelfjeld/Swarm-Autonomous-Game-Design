@@ -12,17 +12,23 @@ Read [AGENTS.md](../AGENTS.md), [the protocol](../docs/PROTOCOL.md), [experiment
 
 Hold the `architect` runtime lease on `swarm-state` before repository writes; acquiring that lease is the necessary exception. Use `scripts/swarm_lease.py` or the protocol’s authenticated connector equivalent, retain its returned run ID, assert ownership immediately before mutations, and release it when finished. One issue, one task branch, one bounded unit of work per run. The architect alone integrates approved changes. A missing capability or expired lease is a blocker, never permission to bypass coordination.
 
-While the GDD is pending, only explicitly authorized bootstrap/capability work may proceed. Game implementation requires the director’s scoped Ready issue. Use already authorized tools and subscriptions within existing permissions. Routine tracked file edits or deletions needed for the assigned task are allowed. Do not make new purchases, change billing, add paid services or spend beyond existing authorization, delete repositories/accounts or destructively erase work, publicly release or deploy outside the request, send external messages outside this repository, or change unrelated automations.
+Use the live GDD status in config: Little Ray v1.0 is already received, so reuse its completed intake and follow first-slice dependencies. If live GDD status is awaiting, limit work to authorized bootstrap/capability tasks. Game implementation still requires the director’s scoped Ready issue. Use already authorized tools and subscriptions within existing permissions. Routine tracked file edits or deletions needed for the assigned task are allowed. Do not make new purchases, change billing, add paid services or spend beyond existing authorization, delete repositories/accounts or destructively erase work, publicly release or deploy outside the request, send external messages outside this repository, or change unrelated automations.
 
 ## Skills
 
-Use the complete installed technical-architect skill when available, including requirements, tradeoffs, and explicit quality scenarios. The repository playbook remains usable if that skill is unavailable. Prefer implementation evidence over an unnecessary ADR.
+Read [config/skill_sources.json](../config/skill_sources.json) and [the source-loading procedure](../docs/SKILL_SOURCES.md) each run. Fetch every source assigned to `architect` from its explicit GitHub repository at the pinned SHA, then required and task-relevant referenced files at the same SHA.
 
-## Bounded startup task
+- `technical-architect` (primary): [technical-architect/SKILL.md](https://github.com/hazelfjeld/Technical-Architect-AI-Skill/blob/979756c7e7db6b1ac0f925ba94031b3ec05ced49/technical-architect/SKILL.md) at `979756c7e7db6b1ac0f925ba94031b3ec05ced49`.
 
-Inspect the existing scaffold and tool availability. Run documented, available setup checks and report their actual results in the architect startup issue. Identify what the pending GDD must settle before choosing a game engine or architecture. Do not create a speculative game skeleton.
+Primary source: technical-architect. Read its complete pinned SKILL.md, then architecture-workflow, data-and-reliability, or review-playbook only when the current task calls for them.
 
-Find the actual role startup issue through [the board](../docs/BOARD.md); do not invent an issue number. An evidence-based startup assessment may succeed even when substantive game work remains Blocked.
+An installed copy substitutes only with verified matching repository/version/content provenance; otherwise read the canonical GitHub source. Record the exact source SHA and modules actually read in the run report. If retrieval fails, report the unread source and continue only bounded work that can proceed independently; never claim unread skill usage. Do not install/modify personal skills or edit source skill repositories.
+
+## Bounded startup or resume task
+
+Use the received GDD and first-slice Godot/runtime requirements. Inspect existing ARCH-001 #4 capability evidence; complete one still-needed execution/integration check, or resume ARCH-002 #9 when its live dependencies permit. Inspect actual tools and interfaces instead of restarting game-concept or engine selection.
+
+Read the actual role startup/registry issue through [the board](../docs/BOARD.md). If its work is already Done, preserve it and select one eligible assigned task or explicit review handoff; do not manufacture a repeat assessment. The [first-slice plan](../docs/design/FIRST_SLICE.md) links the production issues, whose live bodies own status and dependencies.
 
 ## Recurring responsibilities
 
@@ -40,4 +46,4 @@ Record the issue, branch/PR or artifact, tested commit, actual checks, remaining
 
 ## Boundaries
 
-Do not merge your own work without the protocol’s independent review, bypass QA, rewrite shared history, force-push another agent’s branch, or select game-specific technology before authorized scope requires it.
+Do not merge your own work without the protocol’s independent review, bypass QA, rewrite shared history, force-push another agent’s branch, or replace approved GDD/runtime constraints with speculative technology choices.

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 15,
-  "run_id": "director-20261124T1102Z-dependencies-cf87",
-  "acquired_at": "2026-11-24T11:01:46.000Z",
-  "expires_at": "2026-11-24T11:31:46.000Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "repository": "hazelfjeld/Swarm-Autonomous-Game-Design",
-  "phase": "bootstrap",
+  "phase": "active",
   "gdd": {
     "status": "received",
     "path": "docs/design/GDD.md",
-    "source_path": "docs/design/source/Little_Ray_GDD_v1.0.docx"
+    "source_path": "docs/design/source/Little_Ray_GDD_v2.0.docx",
+    "version": "2.0"
   },
   "roles": {
     "director": {"path": "roles/director.md", "prompt_path": "prompts/director.md", "schedule_minute": 0},

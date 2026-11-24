@@ -7,13 +7,15 @@
 - [Pull requests](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/pulls)
 - [Live lease files](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/tree/swarm-state/coordination/leases)
 
-## Little Ray design intake
+## Little Ray current design
 
-Little Ray GDD v1.0 is **received**. Read the [full GDD](design/GDD.md), [source record and original](design/SOURCE.md), [design baseline](design/DESIGN_BASELINE.md), and [first-slice assignments](design/FIRST_SLICE.md). DIRECTOR-001 is complete and closed after PR #15. Reuse the received working baseline; no original chat attachment or repeated intake is needed.
+Little Ray GDD **v2.0 is received**. Hazel requested the Dragon City / Monster Legends-style direction correction in [DIRECTOR-002 #22](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/22). Read the [full GDD](design/GDD.md), [source/archive record](design/SOURCE.md), [baseline](design/DESIGN_BASELINE.md), and [first-slice assignments](design/FIRST_SLICE.md). V1 originals and completed DIRECTOR-001 intake remain historical; conflicting sanctuary rules are superseded.
 
-The next scoped tasks are ARCH-002 [#9](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/9), ART-002 [#10](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/10), ART-003 [#11](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/11), GAMEPLAY-002 [#12](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/12), GAMEPLAY-003 [#13](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/13), and QA-002 [#14](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/14). Their issue bodies own status and dependencies. They initially wait on the named role capability evidence and preceding slice work.
+The current loop is resident Gold, timed crops, Food feeding, random breeding, a separate hatchery, compatible elemental housing, three-versus-three adventure battles and island expansion. The corrected product has rarity/rank power and continuing collection/Arena progression.
 
-The phase remains `bootstrap` until production tasks are Ready. Existing capability work can proceed now. Hourly registration and scheduled-run verification remain separately recorded; neither is a new permission gate for authorized interactive work.
+Existing #9–#14 remain the role tasks with revised criteria where required. [GAMEPLAY-004 #23](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/23) separates breeding/hatching, and [GAMEPLAY-005 #24](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/24) integrates the complete journey. Issues own current status and dependencies. Compatible runtime, art-trial and capability work continues; no new intake or duplicated kickoff is required.
+
+Live phase comes from config, not a historical paragraph. Hourly registration and scheduled-run verification remain separate from actual interactive capability. This design revision does not change schedules or coordination authority.
 
 ## Startup assignments
 
@@ -35,12 +37,15 @@ All roles read [the versioned skill source manifest](../config/skill_sources.jso
 
 ## Next dependency handoffs
 
-- Accepted ARCH-001 evidence unblocks existing ARCH-002 #9.
-- Accepted ART-001 evidence independently unblocks existing ART-002 #10.
-- ART-003 #11 needs #9 and #10; GAMEPLAY-002 #12 needs #5 and #9.
-- GAMEPLAY-003 #13 needs #9, #11, and #12; QA-002 #14 needs #7 and #13.
+- Accepted ARCH-001 evidence continues to support existing ARCH-002 #9; preserve its current probe and branch.
+- Accepted ART-001 evidence supports ART-002 #10's mascot treatment trial against the current city/battle presentation.
+- Revised ART-003 #11 needs the v2 revision, #9 interfaces and #10 treatment.
+- Revised GAMEPLAY-002 #12 needs the v2 revision, #5 capability and #9 interfaces; it owns the city/economy/feeding state.
+- GAMEPLAY-004 #23 uses #12 for separate breeding/hatching; GAMEPLAY-003 #13 uses #12/#9 for three-versus-three combat.
+- GAMEPLAY-005 #24 integrates #9, #11, #12, #13 and #23 into the normal-control journey.
+- QA-002 #14 needs #7 capability and the exact #24 candidate.
 
-Keep these existing issues and their acceptance criteria. The issue bodies own current status; do not mark a dependency complete merely because the GDD was received or a skill loaded.
+The user-authorized v2 revision changes game requirements; issue histories retain earlier criteria and evidence. Do not mark dependencies complete merely because a design or skill was read.
 
 ## Automation registry
 

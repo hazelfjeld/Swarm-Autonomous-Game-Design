@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "qa",
-  "run_id": null,
-  "generation": 25,
-  "acquired_at": null,
-  "expires_at": null
+  "run_id": "qa-20261124T2140Z-g26-backup-observation",
+  "generation": 26,
+  "acquired_at": "2026-11-24T21:40:46.728Z",
+  "expires_at": "2026-11-24T22:10:46.728Z"
 }

@@ -169,12 +169,12 @@ jobs:
                               {"type": "pointerUp", "button": 0}]}]})
 
           def canvas_ready():
-              # The generated loader hides #status when Engine.startGame resolves.
+              # The pinned Godot HTML shell removes #status when Engine.startGame resolves.
               return script("""
                 const c = document.querySelector('canvas');
                 const s = document.getElementById('status');
                 return c && c.width > 0 && c.height > 0 &&
-                       s && getComputedStyle(s).display === 'none'
+                       !s
                   ? c.getBoundingClientRect().toJSON() : null;
               """)
 
@@ -200,6 +200,8 @@ jobs:
                   session = "/session/" + opened["sessionId"]
                   print("Browser:", opened["capabilities"].get("browserVersion"), flush=True)
                   api("POST", session + "/timeouts", {"script": 10000, "pageLoad": 30000})
+                  api("POST", session + "/goog/cdp/execute", {"cmd": "Emulation.setDeviceMetricsOverride",
+                      "params": {"width": 720, "height": 820, "deviceScaleFactor": 1, "mobile": False}})
                   api("POST", session + "/url", {"url": url})
                   bounds = until(canvas_ready, "Godot loader completion")
                   print("Canvas bounds:", bounds, flush=True)

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": null,
-  "generation": 21,
-  "acquired_at": null,
-  "expires_at": null
+  "run_id": "nova-arch002-uid-1795535370813",
+  "generation": 22,
+  "acquired_at": "2026-11-24T15:49:30Z",
+  "expires_at": "2026-11-24T16:19:30Z"
 }

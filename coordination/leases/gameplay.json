@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "gameplay",
-  "run_id": null,
-  "generation": 2,
-  "acquired_at": null,
-  "expires_at": null
+  "run_id": "3760ec65-d2b0-455d-a42c-bde95e748ab8",
+  "generation": 3,
+  "acquired_at": "2026-11-24T01:21:00Z",
+  "expires_at": "2026-11-24T01:51:00Z"
 }

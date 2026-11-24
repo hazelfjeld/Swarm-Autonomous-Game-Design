@@ -1,0 +1,69 @@
+{
+  "baseline_commit": "08beacae99ea23394438cb2f61f8e7772b6ac47e",
+  "scope": "Interactive startup capability checks; no Little Ray implementation, hosted build, or playtest",
+  "probe_sha256": {
+    "reports/capabilities/gameplay_probe/smoke.gd": "006daecefe5866c8c51d21b55c930aafe5a20356d9142001dfc178ad8b94262b",
+    "reports/capabilities/gameplay_probe/project.godot": "22d766c9d810bc363d00bed50547c99ee9e3d9bc3a61b35f642670b6c5308f79"
+  },
+  "checks": [
+    {
+      "command": [
+        "python3",
+        "scripts/validate_setup.py"
+      ],
+      "started_at": "2026-11-23T23:40:30.767081+00:00",
+      "finished_at": "2026-11-23T23:40:30.902609+00:00",
+      "exit_code": 0,
+      "stdout": "SETUP VALIDATION PASSED: five role definitions, kickoff files, config, and local links\nScope: repository setup only; no remote access, schedules, game build, or playtest verified.\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-v"
+      ],
+      "started_at": "2026-11-23T23:40:30.902681+00:00",
+      "finished_at": "2026-11-23T23:40:31.195410+00:00",
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "test_acquire_generates_id_and_default_expiry (test_swarm_lease.LeaseTests.test_acquire_generates_id_and_default_expiry) ... ok\ntest_api_failure_never_reports_success_and_does_not_retry_ambiguous_write (test_swarm_lease.LeaseTests.test_api_failure_never_reports_success_and_does_not_retry_ambiguous_write) ... ok\ntest_cli_outputs_machine_readable_failure (test_swarm_lease.LeaseTests.test_cli_outputs_machine_readable_failure) ... ok\ntest_conflict_retries_are_bounded (test_swarm_lease.LeaseTests.test_conflict_retries_are_bounded) ... ok\ntest_expiry_boundary_and_takeover_preserve_monotonic_generation (test_swarm_lease.LeaseTests.test_expiry_boundary_and_takeover_preserve_monotonic_generation) ... ok\ntest_live_other_run_is_rejected_and_same_run_resumes_without_extension (test_swarm_lease.LeaseTests.test_live_other_run_is_rejected_and_same_run_resumes_without_extension) ... ok\ntest_missing_state_and_invalid_state_fail_closed (test_swarm_lease.LeaseTests.test_missing_state_and_invalid_state_fail_closed) ... ok\ntest_old_release_and_renew_cannot_overwrite_takeover_after_read (test_swarm_lease.LeaseTests.test_old_release_and_renew_cannot_overwrite_takeover_after_read) ... ok\ntest_overlapping_acquisition_rereads_winner_after_cas_conflict (test_swarm_lease.LeaseTests.test_overlapping_acquisition_rereads_winner_after_cas_conflict) ... ok\ntest_renew_and_release_then_next_acquire (test_swarm_lease.LeaseTests.test_renew_and_release_then_next_acquire) ... ok\ntest_same_run_reacquire_after_expiry_is_a_new_generation (test_swarm_lease.LeaseTests.test_same_run_reacquire_after_expiry_is_a_new_generation) ... ok\ntest_ttl_bounds (test_swarm_lease.LeaseTests.test_ttl_bounds) ... ok\ntest_unrelated_blob_change_can_retry_acquisition (test_swarm_lease.LeaseTests.test_unrelated_blob_change_can_retry_acquisition) ... ok\ntest_http_failure_and_malformed_success_are_not_success (test_swarm_lease.TransportTests.test_http_failure_and_malformed_success_are_not_success) ... ok\ntest_write_supplies_expected_sha_branch_and_json_via_stdin (test_swarm_lease.TransportTests.test_write_supplies_expected_sha_branch_and_json_via_stdin) ... ok\ntest_approved_gdd_must_resolve_to_a_real_repo_file (test_validate_setup.SetupContractTests.test_approved_gdd_must_resolve_to_a_real_repo_file) ... ok\ntest_boolean_is_not_a_minute_or_issue_identifier (test_validate_setup.SetupContractTests.test_boolean_is_not_a_minute_or_issue_identifier) ... ok\ntest_broken_local_handoff_link_is_rejected (test_validate_setup.SetupContractTests.test_broken_local_handoff_link_is_rejected) ... ok\ntest_cannot_enter_active_phase_while_awaiting_gdd (test_validate_setup.SetupContractTests.test_cannot_enter_active_phase_while_awaiting_gdd) ... ok\ntest_complete_bootstrap_is_valid_without_a_gdd (test_validate_setup.SetupContractTests.test_complete_bootstrap_is_valid_without_a_gdd) ... ok\ntest_external_links_anchors_and_fenced_examples_are_allowed (test_validate_setup.SetupContractTests.test_external_links_anchors_and_fenced_examples_are_allowed) ... ok\ntest_missing_kickoff_prevents_incomplete_launch (test_validate_setup.SetupContractTests.test_missing_kickoff_prevents_incomplete_launch) ... ok\ntest_non_object_config_reports_error_without_crashing (test_validate_setup.SetupContractTests.test_non_object_config_reports_error_without_crashing) ... ok\ntest_path_cannot_escape_repository (test_validate_setup.SetupContractTests.test_path_cannot_escape_repository) ... ok\ntest_received_gdd_allows_active_phase_without_an_extra_approval (test_validate_setup.SetupContractTests.test_received_gdd_allows_active_phase_without_an_extra_approval) ... ok\ntest_reused_board_issue_does_not_pass_as_separate_roles (test_validate_setup.SetupContractTests.test_reused_board_issue_does_not_pass_as_separate_roles) ... ok\ntest_schedule_collision_and_wrong_task_count_are_rejected (test_validate_setup.SetupContractTests.test_schedule_collision_and_wrong_task_count_are_rejected) ... ok\ntest_stale_or_duplicate_roles_are_rejected (test_validate_setup.SetupContractTests.test_stale_or_duplicate_roles_are_rejected) ... ok\ntest_template_placeholder_is_rejected_but_explanatory_word_is_allowed (test_validate_setup.SetupContractTests.test_template_placeholder_is_rejected_but_explanatory_word_is_allowed) ... ok\n\n----------------------------------------------------------------------\nRan 29 tests in 0.053s\n\nOK\n"
+    },
+    {
+      "command": [
+        "godot",
+        "--headless",
+        "--path",
+        "reports/capabilities/gameplay_probe",
+        "--script",
+        "smoke.gd"
+      ],
+      "started_at": "2026-11-23T23:40:31.195468+00:00",
+      "finished_at": "2026-11-23T23:40:31.503583+00:00",
+      "exit_code": 0,
+      "stdout": "Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org\n\n{\"capability_smoke\":\"ok\",\"engine\":\"4.7.2-stable (official)\",\"probe_id\":\"GAMEPLAY-001\",\"value\":42.0}\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "godot",
+        "--headless",
+        "--path",
+        "/tmp/gameplay-debug-probe-621eamlb",
+        "--script",
+        "invalid.gd"
+      ],
+      "intent": "Expected parser failure in a disposable non-game script",
+      "script_source": "extends SceneTree\n\nfunc _initialize() -> void:\n\tvar unfinished =\n",
+      "started_at": "2026-11-23T23:40:31.504203+00:00",
+      "finished_at": "2026-11-23T23:40:31.679249+00:00",
+      "exit_code": 1,
+      "stdout": "Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org\n\n",
+      "stderr": "SCRIPT ERROR: Parse Error: Expected expression for variable initial value after \"=\".\n          at: GDScript::reload (res://invalid.gd:4)\nERROR: Failed to load script \"res://invalid.gd\" with error \"Parse error\".\n   at: load (modules/gdscript/gdscript_resource_format.cpp:46)\n"
+    }
+  ]
+}

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "qa",
-  "run_id": null,
-  "generation": 11,
-  "acquired_at": null,
-  "expires_at": null
+  "run_id": "qa-20261124T0740Z-qa001-reconcile",
+  "generation": 12,
+  "acquired_at": "2026-11-24T07:40:58.241Z",
+  "expires_at": "2026-11-24T08:10:58.241Z"
 }

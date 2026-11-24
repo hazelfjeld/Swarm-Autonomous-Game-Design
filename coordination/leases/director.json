@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "director",
-  "run_id": null,
-  "generation": 8,
-  "acquired_at": null,
-  "expires_at": null
+  "run_id": "director-20261124T0502Z-phase-reconcile-3e79c",
+  "generation": 9,
+  "acquired_at": "2026-11-24T05:01:58.316Z",
+  "expires_at": "2026-11-24T05:31:58.316Z"
 }

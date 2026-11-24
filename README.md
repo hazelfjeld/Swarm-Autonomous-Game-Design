@@ -2,7 +2,7 @@
 
 Five specialist ChatGPT instances collaborate through this repository: a game director, technical architect/integrator, gameplay engineer, art/audio creator, and independent QA evaluator.
 
-**Little Ray GDD v1.0 is received. Current phase: bootstrap, pending role capability checks.** Read the [full design document](docs/design/GDD.md), [original illustrated Word document](docs/design/source/Little_Ray_GDD_v1.0.docx), [design baseline](docs/design/DESIGN_BASELINE.md), and [first playable slice](docs/design/FIRST_SLICE.md). The first production tasks have named prerequisites; their issue statuses determine readiness.
+**Little Ray GDD v2.0 is received.** The current direction is a Dragon City / Monster Legends-style island city, creature collector and three-versus-three RPG with cute elemental manta rays. Read the [full GDD](docs/design/GDD.md), [illustrated Word companion](docs/design/source/Little_Ray_GDD_v2.0.docx), [design baseline](docs/design/DESIGN_BASELINE.md), and [first playable slice](docs/design/FIRST_SLICE.md). Live phase and task readiness remain in config and the linked issues. [DIRECTOR-002 #22](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/22) records the user-authorized correction; v1 originals remain archived.
 
 ## Start here
 
@@ -28,7 +28,7 @@ The schedules are launch instructions, not evidence that automations already exi
 - A shared [coordination protocol](docs/PROTOCOL.md), issue templates, PR template, and durable run-report template.
 - Per-role cooperative leases on the `swarm-state` branch, using compare-and-swap updates to avoid duplicate active runs.
 - A small Python helper and setup checks, with CI for the coordination files.
-- The complete Little Ray GDD, preserved Word original and [source record](docs/design/SOURCE.md), with a bounded first-slice backlog.
+- The complete Little Ray GDD, current Word companion, archived v1 originals and [source record](docs/design/SOURCE.md), with a bounded first-slice backlog.
 - A [GDD intake path](docs/GDD_INTAKE.md), an experiment record, and a [verification report](docs/SETUP_VERIFICATION.md).
 
 ## Local checks

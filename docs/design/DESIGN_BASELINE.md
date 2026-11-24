@@ -1,64 +1,66 @@
 # Little Ray design baseline
 
-Version: intake of GDD v1.0, 23 November 2026. Owner: director. Source: [complete GDD](GDD.md), [provenance and original](SOURCE.md). Task: [DIRECTOR-001 #3](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/3).
+Current working design: **GDD v2.0**, dated 23 November 2026. Owner: director. Revision: [DIRECTOR-002 #22](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/22). Read the [complete GDD](GDD.md), [source and archival record](SOURCE.md), and [first-slice assignments](FIRST_SLICE.md).
 
-## Authority and design status
+## Explicit direction correction
 
-The user asked for cute manta rays in a Dragon City-style game and requested that the completed Little Ray GDD be added to this experiment. The GDD records the established baby-manta identity, the prior project/workbook and intended Godot/browser delivery. These are the supplied project foundations.
+Hazel rejected the v1 cozy-sanctuary interpretation and requested a **Dragon City / Monster Legends-style clone using the cute manta rays**. The game is an expanding island city and creature collection RPG: breed desirable elemental species, hatch them, grow Food, develop stronger teams and beat increasingly difficult content. This instruction supersedes conflicting v1 requirements.
 
-The GDD's detailed mechanics, economy, encounter scripts, production budgets and proposed rendering comparison form a **working production baseline**. They can support bounded implementation and tests, but are not individually human-approved or validated for fun. Use `received`, not `approved`, for this intake. Distinguish an explicit user requirement, a prior project foundation, a new design choice, and a measured result in future decisions.
+The working combination is Dragon City-style island economy and breeding with Monster Legends-style **three actors per side** in turn-based battles. Each actor has personal Stamina, equipped skills, cooldowns and Speed. The exact formulas, roster and staging are authored Little Ray proposals; they are not representations of undisclosed reference-game internals or measured balance.
 
-## Experience and core loop
+The GDD status remains **received**. The user's correction authorizes the revision and this genre direction; it does not mean every new tuning number has been individually approved or human-playtested.
 
-**Promise:** the little ray loved at the beginning can still contribute at the end. Preserve attachment, understandable discovery and gentle mastery. Rays retain the rounded baby silhouette as they grow; new varieties add choices without making favorite individuals obsolete.
+## Governing experience and loop
 
-The player names and homes individual rays, collects resources and trains favorites, chooses parents to discover another variety, records the new family member, prepares a small team, explores a short reef challenge, then returns to a visibly changed sanctuary. Individual identity, parents, names and acquisition history persist through movement and reloads. Decoration and resident grouping support expression without a mandatory efficiency layout.
+The player chooses a collection or battle target, prepares its economic and breeding requirements, produces an egg, hatches it into suitable housing, trains it and uses the result to open the next target. The city is a functional production system. Cute individual names, faces and growth support the collector fantasy while rarity and investment create real power differences.
 
-The audience is hypothesized to enjoy cute collecting, expressive home building and approachable turn-based choices. Brief 5–15 minute visits and a roughly 2–3 hour campaign are design targets to measure, not observed player data or a release promise.
+**Collect resident Gold → pay for timed crops → harvest Food → feed rays → breed a saved random egg → incubate in a separate hatchery → place in a compatible habitat → battle and expand → pursue stronger or rarer species.**
 
-## Working MVP boundaries
+The intended horizon is continuing progression over repeated visits and days/weeks. A finite initial adventure map is one track within that game; it is not a two-hour ending. Timers, storage limits, duplicate decisions and expansion should create plans whose purpose players understand. Their actual pacing must be observed.
 
-| Area | GDD v1.0 baseline | Source |
+## Working product contracts
+
+| Area | GDD v2 rule | Source |
 | --- | --- | --- |
-| Cast | Eight varieties: Blueberry, Sunbeam, Pearlcloud, Ripple, Mossdrop, Rosefin, Moonpool, Emberfin | §§2, 6 |
-| Homes | Four types: Sunlit Shallows, Kelp Garden, Moonlit Cove, Warm Spring; six placed-home plots, two initially; capacity four, upgradeable to six | §§2, 7 |
-| Breeding | One nursery slot; six launch recipe rules; guaranteed first Blueberry/Sunbeam Pearlcloud and Blueberry/Mossdrop Rosefin; outcome committed when pairing starts | §8 |
-| Adventures | Three authored regions and guardians; 15 main nodes plus two optional nodes | §§5, 14 |
-| Team challenges | Up to three individuals, one active per side; visible intent; Bop, Guard, signature and Swap; shared Energy per side | §10 |
-| Progression | Levels 1–10, Pearls and Food, journal and campaign milestones | §§6, 9 |
-| Expression | Naming, inherited cosmetic accents, personalities/buddy behavior and eight decoration types | §§6–8, 12 |
-| Persistence | Versioned local saves, previous-good recovery and portable backup/import | §§13, 17 |
+| City | Four planned 16×16 islands; each begins with four 4×4 sectors in an 8×8 block; buy adjacent sectors and place buildings | §4 |
+| Housing | Eight element types; a ray must match at least one; actual residents generate Gold; empty habitats generate zero | §§4, 6–7 |
+| Farming | Gold-funded crop choices with different durations/yields; one manual harvest per crop, no free passive garden | §7 |
+| Collection | Initial target 24 species: 8 Common, 4 Uncommon, 6 Rare, 4 Epic, 2 Legendary; future catalog expansion | §§3, 5 |
+| Rarity | Different Health/Power, income and level ceilings; lower-tier usefulness does not imply endgame power equality | §§5–6 |
+| Breeding | Parent-element outcome pools, explicit named Legendary mode, disclosed discovery focus, one guided tutorial exception | §8 |
+| Hatchery | Separate breeding and incubation jobs; full slots/habitats are safe explicit bottlenecks | §§4, 8 |
+| Progression | Separate account XP, four-pip Food levels, element Temples, species cells/ranks and later runes | §§7, 9 |
+| Combat | Three actors on each side; personal Health/Power/Speed/Stamina, four learned/equipped slots, Basic/Recover | §10 |
+| Adventure | Four target regions, 40 nodes, bosses/escorts, Energy, stars and distinct first/repeat rewards | §11 |
+| Arena | Labeled NPC Arena first; actual asynchronous attack/defense teams and seasons require a connected authoritative service | §12 |
+| Continuing product | Catalog updates, recurring collection events and later teams/cooperative competition | §§3, 12 |
 
-The opening has 100 Pearls and 30 Food. A feed spends five Food for 15 XP. Each placed home produces three Pearls per minute, independent of occupancy; the fixed free garden produces three Food per minute. Use the source tables for caps, level thresholds, recipes, costs and settlement rules. Do not substitute a parallel tuning spreadsheet or infer missing values from these examples.
+All initial 24 species have a permanent non-purchase route. Gold, Food and earnable Gems belong to the prototype. Real-money purchases, ads, payment integration and public deployment are not part of this revision task. Their eventual product decisions do not remove the defining gameplay systems.
 
-Guest Cove preserves arrivals when homes are full. Moving residents and restoring stored empty homes must allow recovery without purchase or deletion. Food trains rays; absence does not cause hunger, illness or lost affection. Preserve ownership and rewards exactly once, including interrupted nursery reveals and battle settlements.
+## Opening contract and first slice
 
-The MVP has a complete ending and continued sanctuary play. It excludes accounts/backend dependencies, paid currencies or skips, randomized purchases, compulsory daily calendars, PvP, trading, cloud sync and live events. The 24-variety/eight-habitat catalog is expansion scope, not the first release. Preserve existing `little_rays` and content identifiers despite the display title **Little Ray**.
+Start with 1,200 Gold, 240 Food, Blueberry, a Tide habitat, one farm and hatchery slot one. The budgeted tutorial purchases and two crops spend 1,040 Gold, leaving 160 before sample/passive/battle income. Feeding Blueberry, Sunbeam and Pearlcloud to level four costs 300 Food; initial Food plus two short crops leaves 20. Explicit quest XP opens each required building before it is requested.
 
-## Platform and presentation
+The initial 8×8 placement fixture uses 3×3 Tide/Light habitats and grotto, with 2×2 hatchery and farms. All six required buildings fit without overlap before the first expansion. Use the exact coordinates and rounding/production/pool rules in the GDD; do not guess from this summary.
 
-The supplied direction is Godot for desktop and touch browsers through the intended ChatGPT Site. The initial implementation choice is GDScript, Compatibility rendering and single-thread web export. The architect must verify and pin an actual stable editor and matching templates, then observe runtime, input, audio and persistence on the real intended host/embedding context. This intake does not establish that the host can run the export or that a current live build implements the GDD.
+The representative slice contains Blueberry, Sunbeam, Mossdrop, Pearlcloud, Kelpskip and Rosefin; Tide/Light/Bloom housing; Common through Rare; two crop choices; separate breeding/hatching; Food levels through ten; three authored adventure encounters; first land expansion; and a persistent return. Emberfin is an opponent-only presentation in this slice. Ordinary random/duplicate results must work beyond the tutorial's guaranteed Pearlcloud.
 
-Keep content definitions separate from saved individuals and state. Commands validate and commit once; scenes and reactions cannot independently grant rewards. Settle elapsed time once, clamp negative time to zero, and cap resume credit at eight hours. Preserve saves on unsupported schema/import failure and prevent two tabs from silently overwriting one profile.
+The corrected first acceptance journey is **city production, breeding, hatching, a real six-actor battle and expansion**. The old Practice Pool and one-active-ray system do not satisfy it. See [FIRST_SLICE.md](FIRST_SLICE.md) for the eight task responsibilities and their actual issues.
 
-The mascot needs a soft snoot, large friendly near eye, broad floppy wing, pale underside and long thin tail. Compare one small pixel and one small cartoon Blueberry at the same play scale before selecting a treatment. The 96×96 canvas is a trial, not a mandatory display size. Record the chosen pivot/padding/filtering and asset provenance before multiplying variants. The GDD cover remains concept art.
+## Presentation and runtime continuity
 
-Audio is gentle and readable: home, adventure and playful challenge families, soft calls and short feedback cues. Begin audio after a user gesture, retain volume settings and pair essential sounds with visible information. Required actions must work with keyboard and touch; clarity cannot depend only on color, motion or sound. Use reduced motion and stable readable controls.
+Preserve the recognizable baby-manta snoot, near eye, broad wing, underside and tail across hatchling/juvenile/adult presentations. The Blueberry pixel/cartoon comparison remains useful, but it must be judged against a functional city and six-actor battle interface. Retain original/generated asset provenance; the previous concept cover is a reference, not a shipped screenshot.
 
-## First acceptance priorities
+Continue the existing Godot/GDScript web-delivery work and verified engine/template pin. Reuse compatible input, audio, save, backup and recovery evidence. Actual-host support and performance remain measured gates. Local prototypes cannot prove real PvP, account security or server-authoritative transactions.
 
-1. **Delivery and identity:** one actual hosted runtime with input/audio/save/backup evidence, plus a Blueberry style trial that preserves the mascot at normal scale.
-2. **Representative journey:** Blueberry, Sunbeam and Pearlcloud; two Sunlit homes; naming/feeding/first pairing; two free props; journal and Guest Cove; three-member party; Practice Pool; persistent return home.
-3. **Recovery:** full homes, busy parents, zero resources, interrupted incubation/reveal, repeated claims/settlement, save/import failure and second-tab conflicts must have observable safe outcomes.
-4. **Human evidence:** a fresh player should complete the loop using normal controls. Record interventions and confusion; a model simulation cannot establish affection, understandable choices or enjoyable pacing.
+Persist stable individuals, jobs, committed outcomes, receipts and profile revisions. Reconcile deadline events chronologically; the old eight-hour cap is replaced with a seven-day reconciliation bound plus per-system caps so twelve-hour hatches can complete. Existing v1 save conversion requires actual fixtures; no destructive reset or invented migration is authorized by a paper revision.
 
-See [FIRST_SLICE.md](FIRST_SLICE.md) for task ownership, dependencies and the exact boundary. No additional campaign or expansion production is part of M0's initial slice.
+## Supersession and readiness
 
-## Decisions still to validate
+GDD §19 explicitly replaces universal Tide housing, empty-home Pearls, automatic Food garden, cosmetic-only rarity, a single short nursery job, fixed home plots/unlimited Guest Cove, level-ten product ceiling, shared Energy/active-ray combat and a short final campaign. Historical v1 files remain archived and unchanged. Existing species keys and useful capability/runtime/art work remain valid.
 
-- Rendering treatment and mascot quality at actual play scale: art/audio produces evidence; director records the recommendation and Hazel's preference where taste is material.
-- Host compatibility, engine/template version, save behavior and supported device matrix: architect observes them; unsupported capabilities stay explicit.
-- Challenge depth, guardian tuning, campaign duration, resource timing and production budgets: prototypes and real-player evidence must settle them before broader promises.
-- The workbook is supporting context, not bundled execution state. GDD §19 lists revisions; this repository's task issues own current work. Obtain a specific missing reference only when a task actually needs it.
+ARCH-002 and ART-002 continue their compatible bounded work. ART-003, GAMEPLAY-002/003 and QA-002 receive revised criteria; GAMEPLAY-004 separates breeding/hatching and GAMEPLAY-005 integrates the larger journey. Do not duplicate historical intake or startup tasks. Live issue dependencies determine Ready/Working status, and current config determines phase. Preserve intervening phase changes; this revision does not alter automations, skill pins or coordination authority.
 
-No unresolved choice requires inventing a different game or delaying independent capability work. All new production issues initially remain **Blocked** on named execution prerequisites. Existing capability issues remain **Ready**. The director changes the experiment phase from `bootstrap` to `active` once actual production work is Ready; automation registration is tracked separately and is not a gate for authorized interactive work.
+## Evidence still needed
+
+The design has arithmetic and independent contract review; it has not been implemented or human-playtested by this revision. Remaining evidence includes actual-host behavior, species production effort, ordinary timer comprehension, repeated-visit economy, battle pacing/team alternatives and connected competition feasibility. Fix specific observed problems through recorded revisions while preserving the user's selected genre.

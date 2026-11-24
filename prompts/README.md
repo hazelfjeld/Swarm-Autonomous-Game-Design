@@ -22,7 +22,7 @@ The full recurring procedure is embedded in every kickoff file so the scheduled 
 
 ## Resume from the received GDD
 
-Little Ray GDD v1.0 is already received and DIRECTOR-001 #3 intake is complete. Read the configured GDD, [design baseline](../docs/design/DESIGN_BASELINE.md), [first-slice plan](../docs/design/FIRST_SLICE.md), and live issue dependencies for #9–#14. Reuse completed intake/capability evidence; do not request the attachment again. Only eligible assigned work proceeds, and a received GDD does not clear unrelated runtime, asset, or review dependencies.
+Little Ray GDD v2.0 is received following the user correction in DIRECTOR-002 #22; DIRECTOR-001 #3 remains completed historical intake. Conflicting v1 sanctuary rules are superseded. Read the configured GDD, [design baseline](../docs/design/DESIGN_BASELINE.md), [first-slice plan](../docs/design/FIRST_SLICE.md), and live issue dependencies for #9–#14, #23 and #24. Reuse completed intake/capability evidence; do not request the attachment again. Only eligible assigned work proceeds, and a received GDD does not clear unrelated runtime, asset, or review dependencies.
 
 Director and architect have primary bindings to the two verified GitHub skills. The remaining roles use relevant supporting modules and their own playbooks; no nonexistent dedicated skill repositories are assumed. Installed copies substitute only with verified matching repository/version/content provenance. Record sources, SHAs, actual module reads, and failures in the run report. Source retrieval failure permits bounded independent work with an honest limitation, not a claim that the unread skill was used.
 

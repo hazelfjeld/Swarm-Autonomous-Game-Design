@@ -1,6 +1,7 @@
 extends RefCounted
 
 const State = preload("res://probe_state.gd")
+const TimerState = preload("res://probe_timer.gd")
 var path: String
 var fail_writes := false
 
@@ -19,6 +20,7 @@ func decode(text: String) -> Dictionary:
 	var decoded: Dictionary = parser.data.duplicate(true)
 	decoded.schema_version = 1
 	decoded.greetings = int(decoded.greetings)
+	decoded.timer = TimerState.normalized(decoded.timer) if decoded.has("timer") else TimerState.fresh()
 	return {"ok": true, "state": decoded}
 
 func load_state() -> Dictionary:

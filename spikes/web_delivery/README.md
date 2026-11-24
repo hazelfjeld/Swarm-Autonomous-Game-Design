@@ -38,3 +38,9 @@ Use one tab. Writer ownership, cross-tab revision checks, migrations, full GDD s
 Canonical `hazelfjeld/Technical-Architect-AI-Skill` at `979756c7e7db6b1ac0f925ba94031b3ec05ced49`: complete `technical-architect/SKILL.md` and `references/data-and-reliability.md`. Repository GDD §13 and stage-zero requirements govern the scope.
 
 Official engine references: [web export](https://docs.godotengine.org/en/stable/tutorials/export/exporting_for_web.html), [Web export options](https://docs.godotengine.org/en/stable/classes/class_editorexportplatformweb.html), and [4.7.2 stable archive](https://godotengine.org/download/archive/4.7.2-stable/). Current host observations, not these documents, must settle actual compatibility.
+
+## Timed-state checkpoint (not yet runtime-verified)
+
+`probe_timer.gd` is a pure diagnostic single-job state machine: idle → running → ready → claimed. The existing probe envelope stores it, and legacy greeting-only schema-1 backups decode with an idle timer. The store remains the write boundary; the timer helper itself does not perform I/O, grant rewards or manage tabs. Injected wall-clock resume clamps negative gaps, discards gaps above seven days, and advances a persisted high-water marker. Injected active elapsed is measured by the caller from the last committed checkpoint; the caller must not apply it twice. The test_store.gd script now includes twelve-hour, duplicate-resume, rollback, active elapsed, claim, legacy-backup and corrupt timer cases. These are newly authored native test cases, not executed evidence until Godot is available.
+
+The diagnostic timer is not yet connected to normal UI controls or monotonic sampling. A future checkpoint must wire start/advance/claim into the same save transaction and verify actual reload, backup, storage and cross-tab behavior. No production schema or GDD economy is introduced by this checkpoint.

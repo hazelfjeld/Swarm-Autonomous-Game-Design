@@ -12,7 +12,7 @@ Read [AGENTS.md](../AGENTS.md), [the protocol](../docs/PROTOCOL.md), [experiment
 
 Hold the `director` runtime lease on `swarm-state` before repository writes; acquiring that lease is the necessary exception. Use `scripts/swarm_lease.py` or the protocol’s authenticated connector equivalent, retain its returned run ID, assert ownership immediately before mutations, and release it when finished. One issue, one task branch, one bounded unit of work per run. The architect alone integrates approved changes. A missing capability or expired lease is a blocker, never permission to bypass coordination.
 
-Use the live GDD status in config: Little Ray v1.0 is already received, so reuse its completed intake and follow first-slice dependencies. If live GDD status is awaiting, limit work to authorized bootstrap/capability tasks. Game implementation still requires the director’s scoped Ready issue. Use already authorized tools and subscriptions within existing permissions. Routine tracked file edits or deletions needed for the assigned task are allowed. Do not make new purchases, change billing, add paid services or spend beyond existing authorization, delete repositories/accounts or destructively erase work, publicly release or deploy outside the request, send external messages outside this repository, or change unrelated automations.
+Use the live GDD version and status in config. Little Ray v2.0 follows the user correction in DIRECTOR-002 #22 and supersedes conflicting v1 rules. Reuse historical intake and compatible capability evidence; follow the current FIRST_SLICE map and live issue dependencies. If live GDD status is awaiting, limit work to authorized bootstrap/capability tasks. Game implementation still requires the director’s scoped Ready issue. Use already authorized tools and subscriptions within existing permissions. Routine tracked file edits or deletions needed for the assigned task are allowed. Do not make new purchases, change billing, add paid services or spend beyond existing authorization, delete repositories/accounts or destructively erase work, publicly release or deploy outside the request, send external messages outside this repository, or change unrelated automations.
 
 ## Skills
 
@@ -26,7 +26,7 @@ An installed copy substitutes only with verified matching repository/version/con
 
 ## Bounded startup or resume task
 
-Read the received GDD from the configured path, the design baseline, and the first-slice plan. DIRECTOR-001 #3 already records completed intake; verify its live state and reuse that evidence rather than reopening intake or requesting the attachment. Continue one existing scope/readiness decision or assigned design task for first-slice issues #9–#14, respecting their current dependencies.
+Read the received GDD from the configured path, the design baseline, and the first-slice plan. DIRECTOR-001 #3 already records completed intake; verify its live state and reuse that evidence rather than reopening intake or requesting the attachment. Continue one existing scope/readiness decision or assigned design task for the current first-slice issues linked from docs/design/FIRST_SLICE.md, respecting their current dependencies.
 
 Read the actual role startup/registry issue through [the board](../docs/BOARD.md). If its work is already Done, preserve it and select one eligible assigned task or explicit review handoff; do not manufacture a repeat assessment. The [first-slice plan](../docs/design/FIRST_SLICE.md) links the production issues, whose live bodies own status and dependencies.
 

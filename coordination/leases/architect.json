@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": "architect-20261124T1010Z-ci-export-check-9c21",
+  "run_id": null,
   "generation": 16,
-  "acquired_at": "2026-11-24T10:11:29.322Z",
-  "expires_at": "2026-11-24T10:41:29.322Z"
+  "acquired_at": null,
+  "expires_at": null
 }

@@ -24,7 +24,7 @@ At every run read, in order:
 
 ## Boundaries and readiness
 
-- Little Ray GDD v1.0 has been received and DIRECTOR-001 #3 intake completed. Verify the current config and issue state, reuse that evidence, and follow the first-slice issues #9–#14; do not request the original attachment or repeat completed intake. Their live dependencies still control readiness.
+- The current Little Ray GDD is received at the configured path. V2.0 supersedes conflicting v1 sanctuary rules following the user correction in DIRECTOR-002 #22. DIRECTOR-001 #3 remains completed historical intake. Read the current design baseline and FIRST_SLICE map, including #23 and #24, and live issue dependencies; do not request the old attachment or repeat intake. Preserve compatible capability/runtime work.
 - Only while live GDD status is actually `awaiting`, perform capability checks and coordination/infrastructure tasks only. Do not invent the game concept, mechanics, art direction, monetization, or game-specific acceptance criteria.
 - `paused` or `stopped` phase means do not begin new work. Check for this before remote mutations. Report a phase change once; avoid repetitive idle messages.
 - Each task has one accountable role, a stable ID, explicit dependencies, acceptance criteria, and a status. The director assigns and prioritizes work. Work on ready assigned tasks, resume your already-owned task, or accept an explicit review/integration handoff within your role. Reviewing another role's issue preserves its implementation owner.

@@ -1,47 +1,55 @@
 # Little Ray first playable slice
 
-Owner: director. Milestone: [M0 #8](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/8). Source: [GDD](GDD.md) §§4, 6–13, 14–15, 17, with [baseline](DESIGN_BASELINE.md). This scopes the representative slice; it does not claim an implemented or playtested build.
+Current source: [GDD v2.0](GDD.md). Owner: director. Revision: [DIRECTOR-002 #22](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/22). Milestone: [M0 #8](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/8). This replaces the v1 sanctuary/Practice Pool acceptance scope.
 
-## Player-visible outcome
+## Player visible outcome
 
-A fresh player meets Blueberry and Sunbeam in two Sunlit homes, names and feeds a favorite, starts the first guaranteed pairing, meets and names Pearlcloud, sees the discovery and family record in the journal, assembles the three rays, completes Practice Pool, and returns to a saved sanctuary. The same named individuals and committed results survive reload. Two free props make the home visibly personal; Guest Cove makes a full home recoverable.
+A fresh player collects Gold from Blueberry's habitat, buys/hatches Sunbeam, builds appropriate housing, grows paid crops, feeds the parents to level four, breeds a saved Pearlcloud egg, transfers it into a separate hatchery, places and trains the hatchling, wins a three-versus-three adventure battle and purchases land. The next visible collection goals are Mossdrop, Kelpskip and Rosefin, using ordinary random pools and duplicate outcomes. Reload preserves the city, individuals, jobs and settled rewards.
 
-This slice uses three varieties, two Sunlit homes, one nursery/first recipe, two props, one practice encounter and one return journey. It excludes the other five launch varieties, remaining habitat themes, guardians/full campaign, expansion recipes and online or paid systems.
+## Scope boundary
 
-## Readiness and assignments
+Include six collectible species, three player housing elements, Common/Uncommon/Rare, the first island's four starting sectors plus one purchased sector, two farms and the one/five-minute crops, Small/Large habitats, one breeding grotto, one hatchery with its Gold-funded second slot, account/feeding through the opening level-ten cap, three encounters and persistent return. Emberfin appears as an explicitly opponent-only battle record/presentation.
 
-The links below are authoritative for current status. At intake, all six production tasks are **Blocked** by the named prerequisites. The four existing execution-capability tasks remain **Ready**. Evidence of a working interactive environment can satisfy the relevant capability dependency; waiting for an hourly automation or first scheduled run is not required.
+The full 24-species catalog, other islands/regions, Lab/runes and connected Arena remain product targets after this slice. Temporary presentation may support subsystem learning, but final slice acceptance requires representative collectible art and normal controls. A one-active-ray fight, debug-granted rare creature or automatic free-Food garden is not this slice.
 
-| Task | Accountable role | Named prerequisites | Observable deliverable |
-| --- | --- | --- | --- |
-| [ARCH-002 #9](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/9) | architect | DIRECTOR-001 intake; ARCH-001 execution capability | Pinned Godot/templates; repeatable export; actual-host input/audio/value persistence and backup round trip; small runtime/save interfaces |
-| [ART-002 #10](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/10) | art-audio | DIRECTOR-001 intake; ART-001 asset capability | Two comparable Blueberry treatment trials at real scale; provenance/settings; recorded style choice |
-| [ART-003 #11](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/11) | art-audio | ART-002 treatment; ARCH-002 runtime interface | Representative Blueberry/Sunbeam/Pearlcloud, two homes/props and key visual/audio reactions in runtime |
-| [GAMEPLAY-002 #12](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/12) | gameplay | Intake; GAMEPLAY-001 execution capability; ARCH-002 interfaces | Normal-control home/feed/first-pairing loop with persistent identities, Guest Cove and recovery |
-| [GAMEPLAY-003 #13](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/13) | gameplay | GAMEPLAY-002; ART-003; ARCH-002 hosted baseline | Three-ray party, Practice Pool and the complete representative return-home journey |
-| [QA-002 #14](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/14) | qa | QA-001 execution/evidence capability; GAMEPLAY-003 exact candidate | Independent exact-version scenario evidence, defects and qualified acceptance; actual player evidence when obtained |
+## Dependencies and assigned issues
 
-Director reviews scope and resolves design findings. Architect alone integrates reviewed PRs. A completed delivery spike does not close the whole slice; a QA pass on an older commit does not approve a newer candidate.
+The linked issues own live status. Existing capability tasks #5–#7 and their reviews remain valid work. ARCH-001 #4 is historical accepted capability evidence. Automation registrations and scheduled-run checks remain separate records; they do not substitute for or unnecessarily block actual interactive capability.
 
-## Acceptance scenarios
+| Task | Owner | Dependencies and output |
+| --- | --- | --- |
+| [ARCH-002 #9](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/9) | architect | Continue received runtime task: actual-host Godot/input/audio/timer/save/backup evidence and small interfaces; retain existing branch/probe |
+| [ART-002 #10](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/10) | art-audio | ART-001 capability; Blueberry treatment/readability against city and six-actor battle contexts |
+| [ART-003 #11](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/11) | art-audio | v2 revision, ART-002 and runtime interface; six collectibles/opponent Emberfin, functional city structures, eggs/crops and battle cues |
+| [GAMEPLAY-002 #12](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/12) | gameplay | v2 revision, GAMEPLAY-001 and runtime/save interface; grid/land, elemental housing, resident Gold, crops, account gates and feeding |
+| [GAMEPLAY-004 #23](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/23) | gameplay | v2 revision and GAMEPLAY-002 state; ordinary pools/focus, separate breed/transfer/hatch jobs and exact ownership |
+| [GAMEPLAY-003 #13](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/13) | gameplay | v2 revision, GAMEPLAY-002 ray records and runtime; six-actor combat, skills/statuses and first three encounters |
+| [GAMEPLAY-005 #24](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/24) | gameplay | City, breeding, combat, representative art and actual-host baseline; normal-control opening journey, expansion and saved return |
+| [QA-002 #14](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/14) | qa | v2 revision, QA-001 capability and exact GAMEPLAY-005 candidate; independent scenario and player evidence |
+
+The director sets readiness from actual dependency evidence. Review/integration continues through the existing protocol; architect remains merge owner. No completed capability task should be recreated merely because the game's scope changed.
+
+## Concrete acceptance scenarios
 
 | Scenario | Required observation |
 | --- | --- |
-| Fresh profile | The normal controls reveal two starters and homes, 100 Pearls, 30 Food and a free garden; a feed costs five Food and commits 15 XP once. |
-| First discovery | Blueberry/Sunbeam pairing previews eligibility/cost/time, consumes one slot and commits the first Pearlcloud at start. Claim creates exactly one individual with the same saved parents and ID. |
-| Full home | A claimed ray is owned and available in Guest Cove. Free relocation or restoration of an owned stored home resolves placement without deleting a ray or demanding a purchase. |
-| Busy parent | Invalid pairing/party actions explain the actual conflict without charging resources or corrupting the existing job. |
-| Interruption | Closing/reloading during incubation or reveal preserves the committed child, elapsed-time settlement and claim receipt; replaying presentation never grants a second ray. |
-| Friendly challenge | The player assembles three individuals, reads one opponent's intent, uses Bop/Guard/signature/Swap and sees understandable safe outcomes. No favorite is consumed. |
-| Return home | Encounter settlement occurs once; home/journal reflect committed results. Reload and repeated result input cannot create duplicate rewards. |
-| Save recovery | A backup round trip restores the tested state. Invalid/unsupported import preserves the active profile. Failure is visible and a second tab cannot silently overwrite a newer save. |
-| Presentation and access | Representative assets retain the mascot at normal scale; essential actions work by keyboard/touch; audio starts from a gesture; essential information has visible equivalents. |
-| Human comprehension | Record a real player's route, confusion and interventions on the exact candidate. Attachment and enjoyable tactical choices remain unverified until observed; do not substitute simulated players. |
+| Physical opening | The GDD's six-building coordinate fixture fits inside 8×8. Farms/hatchery are 2×2; habitats/grotto are 3×3. |
+| Budget and gates | The required purchases/two crops spend 1,040 of 1,200 Gold. Training three rays to level four spends 300 Food; starting 240 plus 80 harvested leaves 20. XP gates open before required actions. |
+| Productive city | Empty habitat income is zero. Resident level/rarity affects its bin. Collection, cap, fractional ticks, relocation and upgrades settle correctly. |
+| Real farms | Gold is paid at planting; Food and crop XP arrive on one harvest. Ready crops remain, no hidden free cycles occur. |
+| Random breeding | Guided Pearlcloud is labeled and limited to one job. Ordinary pools match previews, allow duplicates and preserve one committed outcome across reload. |
+| Hybrid and focus | Pearlcloud/Mossdrop mixture has the documented probabilities; eligible focus adjusts the final distribution once and preserves its counter/lifetime. |
+| Separate queues | Breeding releases parents at deadline but holds its egg until transfer; hatchery starts a distinct timer; full/incompatible housing blocks placement safely. |
+| Six actor battle | All three allies and three opponents use individual Stamina/skills/cooldowns and Speed turns. Elements, statuses and KO rules follow the current GDD. |
+| Progression result | First-clear/repeat/star rewards and entry costs settle once. The player buys the first sector and sees another collection or city goal. |
+| Return and recovery | Normal reload, long absence, upgrade completion, twelve-hour timer fixture, corrupt import, duplicate commands and second tab retain valid ownership/state. |
+| Actual presentation | The city conveys farms/habitats/eggs/expansion and the battle shows all actors. Required controls work in declared mouse/keyboard/touch contexts with visible audio equivalents. |
+| Human understanding | Record what a real player understands about the next target, two queues, duplicate choice and combat. Model simulations do not supply this evidence. |
 
-The source GDD remains authoritative for complete formulas, state transitions, times, caps and edge cases. These scenarios select verification priorities rather than replacing those rules.
+Use injected RNG and accelerated clocks only for explicitly labeled deterministic tests. Also observe the ordinary real-time tutorial. The intended first team is Blueberry, Sunbeam and Pearlcloud at level four; a just-hatched level-one Pearlcloud is not the same fixture.
 
-## Evidence and completion
+## Evidence and handoff
 
-Retain exact source/content/build identities, reproducible commands, declared browser/device/embedding context, scenario results and relevant screenshots or logs. Separate static inspection, build success, automated execution, observed interaction and human play. An unavailable host/device or missing human session remains explicitly unverified.
+Retain exact source/content/build identities, run/export commands, browser/device/embedding context, logs and useful screenshots. Separate document review, source tests, actual runtime, interaction and human play. Missing platform or human evidence remains unverified.
 
-M0 completes only after the bounded journey is reproducible and can be tried, blocking defects are corrected and independently reevaluated, architect integration is complete, and missing automation registrations are identified honestly. No game build, public deployment, scheduled-run execution or human playtest is established by the GDD intake.
+M0 is not complete because this GDD was rewritten. Completion still requires a reproducible candidate the user can try, independent verification/corrections and architect integration. The wider progression and connected product have later gates. The new document changes the accepted game direction while preserving the repository's coordination, skill bindings and existing work.

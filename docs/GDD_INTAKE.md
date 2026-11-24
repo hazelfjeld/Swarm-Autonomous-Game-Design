@@ -1,6 +1,6 @@
 # GDD intake
 
-Little Ray GDD v1.0 was received on 23 November 2026. Read the [canonical full Markdown](design/GDD.md), [preserved Word original](design/source/Little_Ray_GDD_v1.0.docx), [source record](design/SOURCE.md), [design baseline](design/DESIGN_BASELINE.md), and [first-slice assignments](design/FIRST_SLICE.md). The procedure below also applies to future supplied versions.
+Little Ray GDD v2.0 is the current received design after the user correction in DIRECTOR-002 #22. Original v1.0 artifacts remain archived; historical DIRECTOR-001 intake stays complete. Read the [canonical full Markdown](design/GDD.md), [current Word companion](design/source/Little_Ray_GDD_v2.0.docx), [source record](design/SOURCE.md), [design baseline](design/DESIGN_BASELINE.md), and [first-slice assignments](design/FIRST_SLICE.md). The procedure below also applies to future supplied versions.
 
 ## When the user supplies it
 

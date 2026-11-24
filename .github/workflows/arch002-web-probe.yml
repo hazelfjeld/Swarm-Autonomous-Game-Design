@@ -59,3 +59,185 @@ jobs:
           path: spikes/web_delivery/build/${{ github.event.pull_request.head.sha }}/
           if-no-files-found: error
           retention-days: 3
+
+      - name: Browser smoke on the authorized CI runner (not Site hosting)
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          command -v google-chrome
+          command -v chromedriver
+          google-chrome --version
+          chromedriver --version
+          python3 - <<'PY'
+          import functools
+          import hashlib
+          import http.server
+          import json
+          import os
+          import pathlib
+          import subprocess
+          import tempfile
+          import threading
+          import time
+          import urllib.request
+
+          root = pathlib.Path("spikes/web_delivery/build") / os.environ["EXPECTED_HEAD"]
+          manifest = json.loads((root / "build-manifest.json").read_text())
+          assert manifest["source_commit"] == os.environ["EXPECTED_HEAD"]
+          for name, entry in manifest["files"].items():
+              data = (root / name).read_bytes()
+              assert len(data) == entry["bytes"], name
+              assert hashlib.sha256(data).hexdigest() == entry["sha256"], name
+
+          class Handler(http.server.SimpleHTTPRequestHandler):
+              def log_message(self, fmt, *args):
+                  print("HTTP:", fmt % args, flush=True)
+
+          # Bind only to the ephemeral CI runner, never to a public interface.
+          server = http.server.ThreadingHTTPServer(
+              ("127.0.0.1", 0), functools.partial(Handler, directory=str(root)))
+          threading.Thread(target=server.serve_forever, daemon=True).start()
+          url = f"http://127.0.0.1:{server.server_port}/index.html"
+          driver = subprocess.Popen(["chromedriver", "--port=9515"])
+          session = None
+          def api(method, path, value=None):
+              req = urllib.request.Request("http://127.0.0.1:9515" + path,
+                  data=None if value is None else json.dumps(value).encode(),
+                  headers={"Content-Type": "application/json"}, method=method)
+              with urllib.request.urlopen(req, timeout=35) as response:
+                  return json.load(response)["value"]
+
+          def until(fn, label, seconds=35):
+              deadline = time.monotonic() + seconds
+              while time.monotonic() < deadline:
+                  result = fn()
+                  if result:
+                      return result
+                  time.sleep(0.5)
+              raise AssertionError("Timed out: " + label)
+
+          def script(source, args=None):
+              return api("POST", session + "/execute/sync",
+                         {"script": source, "args": args or []})
+
+          def saved():
+              # Inspect the browser's persisted IDBFS data, not a synthetic
+              # page variable, a save-button receipt, or a mocked filesystem.
+              return api("POST", session + "/execute/async", {"args": [], "script": """
+                const done = arguments[arguments.length - 1];
+                (async () => {
+                  for (const info of await indexedDB.databases()) {
+                    if (!info.name) continue;
+                    const db = await new Promise((resolve, reject) => {
+                      const r = indexedDB.open(info.name);
+                      r.onsuccess = () => resolve(r.result);
+                      r.onerror = () => reject(r.error);
+                    });
+                    try {
+                      if (!db.objectStoreNames.contains('FILE_DATA')) continue;
+                      const records = await new Promise((resolve, reject) => {
+                        const matches = [];
+                        const r = db.transaction('FILE_DATA', 'readonly')
+                                    .objectStore('FILE_DATA').openCursor();
+                        r.onerror = () => reject(r.error);
+                        r.onsuccess = () => {
+                          const c = r.result;
+                          if (!c) return resolve(matches);
+                          if (String(c.key).endsWith('/delivery_probe.json') &&
+                              c.value && c.value.contents) {
+                            matches.push(JSON.parse(new TextDecoder().decode(c.value.contents)));
+                          }
+                          c.continue();
+                        };
+                      });
+                      if (records.length === 1) return records[0];
+                      if (records.length > 1) throw new Error('Ambiguous persisted probe');
+                    } finally { db.close(); }
+                  }
+                  return null;
+                })().then(done, e => done({browser_error: String(e)}));
+              """})
+
+          def click(x, y):
+              api("POST", session + "/actions", {"actions": [{
+                  "type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
+                  "actions": [{"type": "pointerMove", "duration": 0, "origin": "viewport",
+                               "x": x, "y": y},
+                              {"type": "pointerDown", "button": 0},
+                              {"type": "pointerUp", "button": 0}]}]})
+
+          def canvas_ready():
+              # The generated loader hides #status when Engine.startGame resolves.
+              return script("""
+                const c = document.querySelector('canvas');
+                const s = document.getElementById('status');
+                return c && c.width > 0 && c.height > 0 &&
+                       s && getComputedStyle(s).display === 'none'
+                  ? c.getBoundingClientRect().toJSON() : null;
+              """)
+
+          def greeting_count(n):
+              value = saved()
+              if value and value.get("browser_error"):
+                  raise RuntimeError(value["browser_error"])
+              return value if value and value.get("greetings") == n else None
+
+          try:
+              # Keep the normal Chrome sandbox and browser policy intact.
+              with tempfile.TemporaryDirectory(prefix="arch002-chrome-") as profile:
+                  def driver_ready():
+                      try:
+                          return api("GET", "/status").get("ready")
+                      except OSError:
+                          return False
+                  until(driver_ready, "ChromeDriver readiness", 15)
+                  opened = api("POST", "/session", {"capabilities": {"alwaysMatch": {
+                      "browserName": "chrome", "goog:chromeOptions": {"args": [
+                          "--headless=new", "--window-size=900,1000",
+                          "--disable-dev-shm-usage", "--user-data-dir=" + profile]}}}})
+                  session = "/session/" + opened["sessionId"]
+                  print("Browser:", opened["capabilities"].get("browserVersion"), flush=True)
+                  api("POST", session + "/timeouts", {"script": 10000, "pageLoad": 30000})
+                  api("POST", session + "/url", {"url": url})
+                  bounds = until(canvas_ready, "Godot loader completion")
+                  print("Canvas bounds:", bounds, flush=True)
+                  assert saved() is None, "Fresh browser profile unexpectedly contains a save"
+                  # Normal mouse input at the greeting button in the 720x820
+                  # diagnostic scene. The coordinate is a fixture, not proof
+                  # of arbitrary layouts or touch support. Fail closed if wrong.
+                  def greet():
+                      b = until(canvas_ready, "canvas after navigation")
+                      click(round(b["x"] + b["width"] * 0.5),
+                            round(b["y"] + b["height"] * (335 / 820)))
+                  greet()
+                  first = until(lambda: greeting_count(1), "first greeting persisted in IndexedDB")
+                  assert first["individual"]["ray_id"] == "probe_ray_001"
+                  print("First greeting persisted.", flush=True)
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "Godot loader after reload")
+                  greet()
+                  second = until(lambda: greeting_count(2), "second greeting after reload")
+                  assert second["individual"] == first["individual"]
+                  print(json.dumps({"browser_smoke": "pass", "source_commit": manifest["source_commit"],
+                      "browser": opened["capabilities"].get("browserVersion"),
+                      "observations": ["loader completion", "mouse greeting", "IndexedDB persistence",
+                                       "reload and second greeting"],
+                      "actual_site_verified": False, "audio_verified": False}), flush=True)
+                  api("DELETE", session)
+                  session = None
+          finally:
+              if session:
+                  try:
+                      api("DELETE", session)
+                  except Exception as error:
+                      print("Browser cleanup:", error, flush=True)
+              driver.terminate()
+              try:
+                  driver.wait(timeout=10)
+              except subprocess.TimeoutExpired:
+                  driver.kill()
+                  driver.wait()
+              server.shutdown()
+          PY

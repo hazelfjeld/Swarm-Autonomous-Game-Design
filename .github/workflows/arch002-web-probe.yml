@@ -1,0 +1,61 @@
+name: ARCH-002 exact-head Godot web probe
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'spikes/web_delivery/**'
+      - '.github/workflows/arch002-web-probe.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arch002-web-probe
+  cancel-in-progress: true
+
+jobs:
+  web-probe:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'swarm/architect/ARCH-002'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact submitted commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify checkout and Python version
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
+      - name: Obtain verified official editor and templates
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          mkdir arch002-engine arch002-templates
+          base=https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable
+          curl --fail --location --retry 2 --connect-timeout 20 --max-time 420 "$base/Godot_v4.7.2-stable_linux.x86_64.zip" -o editor.zip
+          curl --fail --location --retry 2 --connect-timeout 20 --max-time 600 "$base/Godot_v4.7.2-stable_export_templates.tpz" -o templates.tpz
+          printf '%s\n' 'cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4  editor.zip' 'f298490b8d44d934be425a5a65a51bf15f422428b229a06a6e11d9ffea248011  templates.tpz' | sha256sum --check --strict
+          unzip -q editor.zip -d arch002-engine
+          chmod +x arch002-engine/Godot_v4.7.2-stable_linux.x86_64
+          unzip -j -q templates.tpz templates/version.txt templates/web_nothreads_release.zip templates/web_nothreads_debug.zip -d arch002-templates
+          test "$(arch002-engine/Godot_v4.7.2-stable_linux.x86_64 --version)" = '4.7.2.stable.official.ed1daf0bf'
+      - name: Exercise build-helper fixture tests
+        run: python3 -B spikes/web_delivery/test_reproduce_export.py
+      - name: Native import, store tests, scene smoke and web export
+        run: |
+          set -euo pipefail
+          python3 spikes/web_delivery/reproduce_export.py --godot "$RUNNER_TEMP/arch002-engine/Godot_v4.7.2-stable_linux.x86_64" --templates "$RUNNER_TEMP/arch002-templates"
+      - name: Retain exact-head export and manifest (not a deployment)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: arch002-web-${{ github.event.pull_request.head.sha }}
+          path: spikes/web_delivery/build/${{ github.event.pull_request.head.sha }}/
+          if-no-files-found: error
+          retention-days: 3

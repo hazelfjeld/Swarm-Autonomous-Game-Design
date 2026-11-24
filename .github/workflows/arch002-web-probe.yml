@@ -362,6 +362,60 @@ jobs:
                                        "confirmed restore", "previous-good copy", "reload",
                                        "malformed input attempt and unchanged records"],
                       "visual_status_review_required": True, "actual_site_verified": False}), flush=True)
+                  # Real UI failure simulation, not a browser storage fault injection.
+                  # The timer is already claimed, so no autonomous checkpoint
+                  # can legitimately change either record during this test.
+                  def scroll_top():
+                      b = until(canvas_ready, "canvas for upward scrolling")
+                      for _ in range(6):
+                          api("POST", session + "/actions", {"actions": [{
+                              "type": "wheel", "id": "wheel",
+                              "actions": [{"type": "scroll", "origin": "viewport",
+                                  "x": round(b["x"] + b["width"] * 0.5),
+                                  "y": round(b["y"] + b["height"] * (80 / 820)),
+                                  "deltaX": 0, "deltaY": -500, "duration": 100}]}]})
+                      time.sleep(0.5)
+
+                  def toggle_save_failure():
+                      scroll_bottom()
+                      # Bottom row of the existing 720x820 fixture.
+                      timer_button(805)
+                      time.sleep(0.5)
+                      scroll_top()
+
+                  before_failure = saved()
+                  previous_before_failure = saved("delivery_probe.json.previous")
+                  assert before_failure == claimed
+                  assert previous_before_failure == third
+                  toggle_save_failure()
+                  screenshot("05-failure-enabled")
+                  greet()
+                  time.sleep(2)
+                  screenshot("06-failed-greeting")
+                  assert saved() == before_failure, "Failed greeting changed active profile"
+                  assert saved("delivery_probe.json.previous") == previous_before_failure, (
+                      "Failed greeting changed previous-good profile")
+                  toggle_save_failure()
+                  screenshot("07-failure-disabled")
+                  # A successful retry in the same scene must apply exactly
+                  # one greeting, not accumulate the rejected candidate.
+                  greet()
+                  retried = until(lambda: greeting_count(3), "greeting after disabling simulated failure")
+                  assert retried == third, "Successful retry did not preserve identity and timer"
+                  assert until(lambda: saved("delivery_probe.json.previous") == before_failure,
+                               "previous-good copy after retry")
+                  screenshot("08-retry-saved")
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "loader after successful retry")
+                  assert until(lambda: greeting_count(3), "successful retry after reload") == retried
+                  assert saved("delivery_probe.json.previous") == before_failure
+                  print(json.dumps({"browser_simulated_write_failure": "pass",
+                      "source_commit": manifest["source_commit"],
+                      "observations": ["failure toggle", "attempted normal greeting",
+                                       "active and previous-good unchanged", "same-scene retry once",
+                                       "reload after successful retry"],
+                      "visual_status_review_required": True, "real_browser_storage_fault_verified": False,
+                      "actual_site_verified": False}), flush=True)
                   print(json.dumps({"browser_smoke": "pass", "source_commit": manifest["source_commit"],
                       "browser": opened["capabilities"].get("browserVersion"),
                       "observations": ["loader completion", "mouse greeting", "IndexedDB persistence",

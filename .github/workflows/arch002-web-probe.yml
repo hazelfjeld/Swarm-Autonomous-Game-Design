@@ -71,6 +71,7 @@ jobs:
           google-chrome --version
           chromedriver --version
           python3 - <<'PY'
+          import base64
           import functools
           import hashlib
           import http.server
@@ -122,10 +123,11 @@ jobs:
               return api("POST", session + "/execute/sync",
                          {"script": source, "args": args or []})
 
-          def saved():
+          def saved(filename="delivery_probe.json"):
               # Inspect the browser's persisted IDBFS data, not a synthetic
               # page variable, a save-button receipt, or a mocked filesystem.
-              return api("POST", session + "/execute/async", {"args": [], "script": """
+              return api("POST", session + "/execute/async", {"args": [filename], "script": """
+                const filename = arguments[0];
                 const done = arguments[arguments.length - 1];
                 (async () => {
                   for (const info of await indexedDB.databases()) {
@@ -145,7 +147,7 @@ jobs:
                         r.onsuccess = () => {
                           const c = r.result;
                           if (!c) return resolve(matches);
-                          if (String(c.key).endsWith('/delivery_probe.json') &&
+                          if (String(c.key).endsWith('/' + filename) &&
                               c.value && c.value.contents) {
                             matches.push(JSON.parse(new TextDecoder().decode(c.value.contents)));
                           }
@@ -279,6 +281,87 @@ jobs:
                       "observations": ["normal start", "persisted running phase", "unloaded interval",
                                        "persisted ready phase", "normal claim", "repeated claim and reload"],
                       "actual_site_verified": False}), flush=True)
+                  # Real UI backup round-trip, not an injected profile.
+                  evidence = pathlib.Path(os.environ["RUNNER_TEMP"]) / "arch002-browser-evidence"
+                  evidence.mkdir(exist_ok=True)
+
+                  def screenshot(name):
+                      (evidence / (name + ".png")).write_bytes(
+                          base64.b64decode(api("GET", session + "/screenshot")))
+
+                  def keys(*values):
+                      events = []
+                      for value in values:
+                          events.extend([{"type": "keyDown", "value": value},
+                                         {"type": "keyUp", "value": value}])
+                      api("POST", session + "/actions", {"actions": [
+                          {"type": "key", "id": "keyboard", "actions": events}]})
+
+                  def scroll_bottom():
+                      # Scroll over the title region rather than the editable
+                      # backup text, which has its own scrolling behavior.
+                      b = until(canvas_ready, "canvas for scrolling")
+                      for _ in range(6):
+                          api("POST", session + "/actions", {"actions": [{
+                              "type": "wheel", "id": "wheel",
+                              "actions": [{"type": "scroll", "origin": "viewport",
+                                  "x": round(b["x"] + b["width"] * 0.5),
+                                  "y": round(b["y"] + b["height"] * (80 / 820)),
+                                  "deltaX": 0, "deltaY": 500, "duration": 100}]}]})
+                      time.sleep(0.5)
+
+                  def preview_backup():
+                      # At the bottom, preview is immediately above the
+                      # save-failure checkbox. Keep this fixed-layout fixture
+                      # consistent for the valid and corrupt cases.
+                      timer_button(752)
+                      time.sleep(0.5)
+
+                  timer_button(590)  # Export the two-greeting, claimed timer record.
+                  screenshot("01-export")
+                  greet()
+                  third = until(lambda: greeting_count(3), "post-export greeting persisted")
+                  assert third["individual"] == claimed["individual"]
+                  assert third["timer"] == claimed["timer"]
+                  assert until(lambda: saved("delivery_probe.json.previous") == claimed,
+                               "previous-good copy after greeting")
+                  scroll_bottom()
+                  preview_backup()
+                  screenshot("02-preview-before-confirm")
+                  assert saved() == third, "Preview changed active profile before confirmation"
+                  keys("\ue00c")  # Escape cancels the confirmation dialog.
+                  time.sleep(0.5)
+                  assert saved() == third, "Cancel changed active profile"
+                  preview_backup()
+                  keys("\ue007")  # Enter accepts the normal confirmation dialog.
+                  restored = until(lambda: greeting_count(2), "confirmed backup restore persisted")
+                  assert restored == claimed, "Backup restore changed identity or timer"
+                  assert until(lambda: saved("delivery_probe.json.previous") == third,
+                               "previous-good copy retained after restore")
+                  screenshot("03-restored")
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "loader after backup restore")
+                  assert until(lambda: greeting_count(2), "restored profile after reload") == claimed
+
+                  # The backup textbox starts empty after reload. Type malformed
+                  # JSON via real keyboard events; do not edit IndexedDB.
+                  timer_button(680)
+                  keys(*"not-json")
+                  scroll_bottom()
+                  preview_backup()
+                  screenshot("04-corrupt-preview")
+                  keys("\ue007")
+                  time.sleep(2)
+                  assert saved() == claimed, "Malformed import changed active profile"
+                  assert saved("delivery_probe.json.previous") == third, "Malformed import changed previous-good copy"
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "loader after malformed import")
+                  assert until(lambda: greeting_count(2), "unchanged profile after malformed import") == claimed
+                  print(json.dumps({"browser_backup": "pass", "source_commit": manifest["source_commit"],
+                      "observations": ["export UI", "preview nonmutation", "cancel nonmutation",
+                                       "confirmed restore", "previous-good copy", "reload",
+                                       "malformed input attempt and unchanged records"],
+                      "visual_status_review_required": True, "actual_site_verified": False}), flush=True)
                   print(json.dumps({"browser_smoke": "pass", "source_commit": manifest["source_commit"],
                       "browser": opened["capabilities"].get("browserVersion"),
                       "observations": ["loader completion", "mouse greeting", "IndexedDB persistence",
@@ -300,3 +383,11 @@ jobs:
                   driver.wait()
               server.shutdown()
           PY
+      - name: Retain browser backup evidence (including failure checkpoints)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: arch002-browser-evidence-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/arch002-browser-evidence/
+          if-no-files-found: warn
+          retention-days: 3

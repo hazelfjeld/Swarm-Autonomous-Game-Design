@@ -222,6 +222,63 @@ jobs:
                   greet()
                   second = until(lambda: greeting_count(2), "second greeting after reload")
                   assert second["individual"] == first["individual"]
+                  # Exercise the real diagnostic job via its normal UI controls.
+                  # Fixed viewport fixture; persisted state is the assertion,
+                  # never the click itself. Do not inject clocks or save data.
+                  def timer_phase(phase):
+                      value = saved()
+                      if value and value.get("browser_error"):
+                          raise RuntimeError(value["browser_error"])
+                      if value and value.get("timer", {}).get("phase") == phase:
+                          assert value["individual"] == second["individual"]
+                          assert value["greetings"] == 2
+                          return value
+                      return None
+
+                  def timer_button(y):
+                      b = until(canvas_ready, "canvas for timer action")
+                      click(round(b["x"] + b["width"] * 0.5),
+                            round(b["y"] + b["height"] * (y / 820)))
+
+                  assert second["timer"]["phase"] == "idle", second
+                  timer_button(435)
+                  running = until(lambda: timer_phase("running"), "timer start persisted", 15)
+                  assert 0 < running["timer"]["remaining_ms"] <= 10000, running
+                  assert running["timer"]["wall_marker_ms"] > 0, running
+                  print("Timer start persisted:", running["timer"], flush=True)
+
+                  # Unload the game completely before the deadline and return
+                  # after real elapsed wall time. This is not a background-tab
+                  # test or a mocked offline-time calculation.
+                  api("POST", session + "/url", {"url": "about:blank"})
+                  assert script("return document.querySelector('canvas') === null")
+                  time.sleep(11)
+                  api("POST", session + "/url", {"url": url})
+                  until(canvas_ready, "Godot loader after offline interval")
+                  ready = until(lambda: timer_phase("ready"), "offline timer completion persisted")
+                  assert ready["timer"]["remaining_ms"] == 0, ready
+                  assert ready["timer"]["wall_marker_ms"] >= running["timer"]["wall_marker_ms"]
+                  print("Offline timer completion persisted:", ready["timer"], flush=True)
+
+                  timer_button(495)
+                  claimed = until(lambda: timer_phase("claimed"), "timer claim persisted")
+                  assert claimed["timer"]["remaining_ms"] == 0, claimed
+                  assert claimed["timer"]["wall_marker_ms"] == ready["timer"]["wall_marker_ms"]
+                  # Repeated normal clicks and a subsequent reload must not
+                  # change the completed diagnostic record.
+                  timer_button(495)
+                  time.sleep(2)
+                  assert saved() == claimed, "Repeated claim changed the committed record"
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "Godot loader after claimed timer reload")
+                  assert until(lambda: timer_phase("claimed"), "claimed timer after reload") == claimed
+                  timer_button(495)
+                  time.sleep(2)
+                  assert saved() == claimed, "Claim after reload changed the committed record"
+                  print(json.dumps({"browser_timer": "pass", "source_commit": manifest["source_commit"],
+                      "observations": ["normal start", "persisted running phase", "unloaded interval",
+                                       "persisted ready phase", "normal claim", "repeated claim and reload"],
+                      "actual_site_verified": False}), flush=True)
                   print(json.dumps({"browser_smoke": "pass", "source_commit": manifest["source_commit"],
                       "browser": opened["capabilities"].get("browserVersion"),
                       "observations": ["loader completion", "mouse greeting", "IndexedDB persistence",

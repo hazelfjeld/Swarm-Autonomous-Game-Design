@@ -49,6 +49,10 @@ var sale_dialog: ConfirmationDialog
 var sale_target: String = ""
 var map_place_mode: bool = false
 var map_mode_button: Button
+var cancel_preview_button: Button
+var map_dragging: bool = false
+var preview_origin: Vector2i = Vector2i.ZERO
+var drag_origin: Vector2i = Vector2i.ZERO
 
 func label_at(value: String, position_: Vector2, size_: Vector2, font_size: int = 20) -> Label:
 	var item := Label.new()
@@ -112,6 +116,10 @@ func _ready() -> void:
 	map_mode_button = button_at("Map: tend / collect", Vector2(30, 150), toggle_map_mode)
 	map_mode_button.size = Vector2(250, 34)
 	map_mode_button.add_theme_font_size_override("font_size", 15)
+	cancel_preview_button = button_at("Cancel preview", Vector2(290, 150), cancel_map_preview)
+	cancel_preview_button.size = Vector2(175, 34)
+	cancel_preview_button.add_theme_font_size_override("font_size", 15)
+	cancel_preview_button.disabled = true
 	status_label = label_at("Tap a habitat or farm to collect; switch map mode to choose a placement.", Vector2(30, 617), Vector2(700, 34), 16)
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label_at("DEV CHECKPOINT · Session only; random breeding, battle and production art not yet wired.", Vector2(30, 655), Vector2(1040, 22), 15)
@@ -302,10 +310,33 @@ func place_selected() -> void:
 		else:
 			act(selection[0], "%s,%d,%d" % [selection[1], int(coordinate_x.value), int(coordinate_y.value)])
 
+func placement_coordinates() -> Vector2i:
+	return Vector2i(int(coordinate_x.value), int(coordinate_y.value))
+
+func set_placement_coordinates(cell: Vector2i) -> void:
+	coordinate_x.value = cell.x
+	coordinate_y.value = cell.y
+	queue_redraw()
+
+func cancel_map_preview() -> void:
+	if not map_place_mode:
+		return
+	set_placement_coordinates(preview_origin)
+	map_dragging = false
+	map_place_mode = false
+	map_mode_button.text = "Map: tend / collect"
+	cancel_preview_button.disabled = true
+	status_label.text = "Placement preview canceled. No city changes."
+
 func toggle_map_mode() -> void:
-	map_place_mode = not map_place_mode
-	map_mode_button.text = "Map: choose placement" if map_place_mode else "Map: tend / collect"
-	status_label.text = "Tap a cell to preview, then confirm below. No Gold spent yet." if map_place_mode else "Tap a habitat or farm to select it and collect ready output."
+	if map_place_mode:
+		cancel_map_preview()
+		return
+	preview_origin = placement_coordinates()
+	map_place_mode = true
+	map_mode_button.text = "Map: choose placement"
+	cancel_preview_button.disabled = false
+	status_label.text = "Tap or drag a cell to preview. Confirm or cancel; no Gold spent yet."
 	queue_redraw()
 
 func map_cell(point: Vector2) -> Vector2i:
@@ -315,31 +346,58 @@ func map_cell(point: Vector2) -> Vector2i:
 	var delta := point - origin
 	return Vector2i(floori((delta.x / axis.x + delta.y / axis.y) / 2.0), floori((delta.y / axis.y - delta.x / axis.x) / 2.0))
 
+func previewable_selection() -> bool:
+	var parts := selected_placement().split(":")
+	return parts.size() == 2 and parts[0] in ["build", "move", "restore_building"]
+
+func map_point_is_usable(point: Vector2) -> bool:
+	if not Rect2(18, 186, 716, 348).has_point(point):
+		return false
+	var cell := map_cell(point)
+	return cell.x >= 0 and cell.y >= 0 and cell.x < Model.ISLAND_SIZE and cell.y < Model.ISLAND_SIZE
+
+func preview_point(point: Vector2) -> bool:
+	if not previewable_selection() or not map_point_is_usable(point):
+		return false
+	var cell := map_cell(point)
+	if cell.x > coordinate_x.max_value or cell.y > coordinate_y.max_value:
+		return false
+	set_placement_coordinates(cell)
+	status_label.text = "Preview cell (%d,%d) · confirm or cancel below." % [cell.x, cell.y]
+	return true
+
 func _gui_input(event: InputEvent) -> void:
-	# GUI consumes child controls first; touch uses the existing mouse emulation.
-	if not (event is InputEventMouseButton):
+	# In placement mode a drag only edits the preview. Release never commits.
+	# Child controls retain their own GUI events; touch uses mouse emulation.
+	if map_place_mode and event is InputEventMouseMotion:
+		if map_dragging and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+			preview_point(event.position)
+			accept_event()
 		return
-	if event.button_index != MOUSE_BUTTON_LEFT or event.pressed:
+	if not (event is InputEventMouseButton) or event.button_index != MOUSE_BUTTON_LEFT:
 		return
-	if not Rect2(18, 186, 716, 348).has_point(event.position):
+	if map_place_mode:
+		if event.pressed:
+			if not map_point_is_usable(event.position):
+				return
+			accept_event()
+			if not previewable_selection():
+				status_label.text = "This action has its own target. Use the confirmation control below."
+				return
+			drag_origin = placement_coordinates()
+			map_dragging = true
+			preview_point(event.position)
+		elif map_dragging:
+			map_dragging = false
+			accept_event()
+			if not preview_point(event.position):
+				set_placement_coordinates(drag_origin)
+				status_label.text = "Outside placement area · previous preview restored."
+		return
+	if event.pressed or not map_point_is_usable(event.position):
 		return
 	var cell := map_cell(event.position)
-	if cell.x < 0 or cell.y < 0 or cell.x >= Model.ISLAND_SIZE or cell.y >= Model.ISLAND_SIZE:
-		return
 	accept_event()
-	if map_place_mode:
-		var parts := selected_placement().split(":")
-		if parts.size() != 2 or not parts[0] in ["build", "move", "restore_building"]:
-			status_label.text = "This action has its own target. Use the confirmation control below."
-			return
-		if cell.x > coordinate_x.max_value or cell.y > coordinate_y.max_value:
-			status_label.text = "That cell is outside the current placement area."
-			return
-		coordinate_x.value = cell.x
-		coordinate_y.value = cell.y
-		status_label.text = "Preview cell (%d,%d) · confirm below to apply." % [cell.x, cell.y]
-		queue_redraw()
-		return
 	for b in city.buildings:
 		var footprint := Rect2i(int(b["x"]), int(b["y"]), int(b["size"]), int(b["size"]))
 		if not footprint.has_point(cell):
@@ -393,6 +451,8 @@ func act(kind: String, value: String) -> void:
 	status_label.text = str(result["message"])
 	if result["ok"]:
 		adapter.capture(city.snapshot())
+		if map_place_mode and kind in ["build", "move", "restore_building"]:
+			preview_origin = placement_coordinates()
 	refresh()
 
 func refresh() -> void:
@@ -517,7 +577,7 @@ func _draw() -> void:
 			var valid: bool = city.can_place(x, y, footprint, selection[1] if selection[0] == "move" else "")
 			var points := PackedVector2Array([iso(x,y),iso(x+footprint,y),iso(x+footprint,y+footprint),iso(x,y+footprint),iso(x,y)])
 			draw_polyline(points, Color("#f3ffe0") if valid else Color("#ffac75"), 3.0, true)
-	ink("Tap a building to tend · map placement mode previews only" if not map_place_mode else "Tap a cell · white = free / orange = blocked · confirm below", Vector2(37, 542), 15)
+	ink("Tap a building to tend · map placement mode previews only" if not map_place_mode else "Tap or drag · white = free / orange = blocked · confirm / cancel", Vector2(37, 542), 15)
 
 func draw_building(b: Dictionary) -> void:
 	var x: float = float(b["x"])
@@ -602,6 +662,30 @@ func click_point_fixture(point: Vector2) -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
+func drag_point_fixture(start: Vector2, finish: Vector2) -> void:
+	var down := InputEventMouseButton.new()
+	down.position = start
+	down.global_position = start
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.pressed = true
+	Input.parse_input_event(down)
+	await get_tree().process_frame
+	var motion := InputEventMouseMotion.new()
+	motion.position = finish
+	motion.global_position = finish
+	motion.relative = finish - start
+	motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+	Input.parse_input_event(motion)
+	await get_tree().process_frame
+	var up := InputEventMouseButton.new()
+	up.position = finish
+	up.global_position = finish
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	Input.parse_input_event(up)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
 func capture_fixture(directory: String) -> void:
 	# CI-only native GUI fixture; no acceleration in normal play.
 	await get_tree().process_frame
@@ -640,9 +724,15 @@ func capture_fixture(directory: String) -> void:
 		push_error("GUI occupied cell preview changed city or missed click")
 		get_tree().quit(1)
 		return
-	await click_point_fixture(iso(3.5, 0.5))
-	if coordinate_x.value != 3 or coordinate_y.value != 0 or city.gold != before_build:
-		push_error("GUI free cell preview missed click or charged before confirmation")
+	await click_fixture(cancel_preview_button)
+	if map_place_mode or placement_coordinates() != Vector2i(3, 0) or city.gold != before_build or not city.construction.is_empty():
+		push_error("GUI cancel preview did not restore original coordinates")
+		get_tree().quit(1)
+		return
+	await click_fixture(map_mode_button)
+	await drag_point_fixture(iso(0.5, 0.5), iso(3.5, 0.5))
+	if coordinate_x.value != 3 or coordinate_y.value != 0 or city.gold != before_build or not city.construction.is_empty():
+		push_error("GUI drag preview missed target or charged before confirmation")
 		get_tree().quit(1)
 		return
 	await click_fixture(build_button)
@@ -660,7 +750,7 @@ func capture_fixture(directory: String) -> void:
 	if get_viewport().get_texture().get_image().save_png(directory + "/04-built-light-habitat.png") != OK:
 		get_tree().quit(1)
 		return
-	print("CITY_BUILD_GUI_PASS: occupied/free map-cell previews without spending, explicit paid Light habitat confirmation and ordinary 30-second construction")
+	print("CITY_BUILD_GUI_PASS: occupied preview, explicit cancel, native drag preview without spending, paid Light habitat confirmation and ordinary 30-second construction")
 	var before_egg: int = city.gold
 	await click_fixture(buy_button)
 	if city.gold != before_egg - 100 or city.founder_egg.is_empty():

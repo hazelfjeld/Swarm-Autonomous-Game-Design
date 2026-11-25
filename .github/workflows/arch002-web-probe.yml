@@ -505,6 +505,84 @@ jobs:
                   print(json.dumps({"browser_emulated_touch": "pass", "source_commit": manifest["source_commit"],
                       "events": events, "physical_device_verified": False,
                       "actual_site_verified": False, "audio_verified": False}), flush=True)
+                  # Observe the actual Web Audio graph on a new document. The
+                  # CI-only analyser taps destination-bound nodes in parallel:
+                  # it does not resume a context, trigger playback or route
+                  # any extra signal to the speakers. Keep autoplay defaults.
+                  cdp("Emulation.setTouchEmulationEnabled", {"enabled": False})
+                  cdp("Page.addScriptToEvaluateOnNewDocument", {"source": """
+                    (() => {
+                      const observed = window.arch002Audio = {
+                        taps: 0, running: 0, peak: 0, trustedCanvasDown: 0, errors: []
+                      };
+                      const taps = [];
+                      const seen = new WeakMap();
+                      const connect = AudioNode.prototype.connect;
+                      AudioNode.prototype.connect = function(destination, ...args) {
+                        const result = Reflect.apply(connect, this, [destination, ...args]);
+                        if (destination === this.context.destination) {
+                          try {
+                            const output = args[0] ?? 0;
+                            if (!seen.has(this)) seen.set(this, new Set());
+                            if (!seen.get(this).has(output)) {
+                              const analyser = this.context.createAnalyser();
+                              analyser.fftSize = 512;
+                              Reflect.apply(connect, this, [analyser, output, 0]);
+                              seen.get(this).add(output);
+                              taps.push({analyser, samples: new Float32Array(analyser.fftSize)});
+                              observed.taps = taps.length;
+                            }
+                          } catch (error) { observed.errors.push(String(error)); }
+                        }
+                        return result;
+                      };
+                      document.addEventListener('pointerdown', event => {
+                        if (event.isTrusted && event.target instanceof HTMLCanvasElement)
+                          observed.trustedCanvasDown++;
+                      }, true);
+                      setInterval(() => {
+                        observed.running = 0;
+                        for (const {analyser, samples} of taps) {
+                          if (analyser.context.state !== 'running') continue;
+                          observed.running++;
+                          analyser.getFloatTimeDomainData(samples);
+                          for (const value of samples)
+                            observed.peak = Math.max(observed.peak, Math.abs(value));
+                        }
+                      }, 10);
+                    })();
+                  """})
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "audio-observed fresh loader")
+                  assert saved() == touched, "Audio-test reload changed profile"
+                  def audio_observation():
+                      return script("return window.arch002Audio")
+                  until(lambda: audio_observation()["taps"] > 0, "destination audio graph")
+                  time.sleep(1)
+                  silent = audio_observation()
+                  assert not silent["errors"] and silent["trustedCanvasDown"] == 0, silent
+                  assert silent["peak"] < 0.0001, ("Unexpected pre-gesture signal", silent)
+                  greet()
+                  seventh = until(lambda: greeting_count(7), "audio gesture greeting persisted")
+                  assert seventh["revision"] == touched["revision"] + 1
+                  assert seventh["individual"] == touched["individual"] and seventh["timer"] == touched["timer"]
+                  def playing_signal():
+                      observation = audio_observation()
+                      assert not observation["errors"], observation
+                      return observation if (observation["running"] > 0 and
+                          observation["trustedCanvasDown"] == 1 and observation["peak"] > 0.001) else None
+                  played = until(playing_signal, "non-silent running Web Audio signal after gesture", 10)
+                  assert until(lambda: saved("delivery_probe.json.previous") == touched,
+                               "audio greeting recovery copy")
+                  screenshot("10-audio-gesture")
+                  audio_report = {"browser_gesture_audio_graph": "pass",
+                      "source_commit": manifest["source_commit"],
+                      "before_gesture": silent, "after_gesture": played,
+                      "observations": ["no pre-gesture signal", "trusted canvas pointer",
+                          "running Web Audio context", "non-silent destination-bound signal"],
+                      "physical_audio_output_verified": False, "actual_site_verified": False}
+                  (evidence / "audio-observation.json").write_text(json.dumps(audio_report, indent=2))
+                  print(json.dumps(audio_report), flush=True)
                   print(json.dumps({"browser_smoke": "pass", "source_commit": manifest["source_commit"],
                       "browser": opened["capabilities"].get("browserVersion"),
                       "observations": ["loader completion", "mouse greeting", "IndexedDB persistence",

@@ -27,6 +27,19 @@ var coordinate_y: SpinBox
 var build_choice_key: String = ""
 var farm_choice_key: String = ""
 var selected_farm: String = "farm-1"
+var ray_title: Label
+var ray_choice: OptionButton
+var habitat_choice: OptionButton
+var shop_choice: OptionButton
+var buy_button: Button
+var place_egg_button: Button
+var move_ray_button: Button
+var egg_info: Label
+var collection_info: Label
+var selected_ray: String = "ray-1"
+var selected_habitat: String = "tide-1"
+var roster_key: String = ""
+var habitat_key: String = ""
 
 func label_at(value: String, position_: Vector2, size_: Vector2, font_size: int = 20) -> Label:
 	var item := Label.new()
@@ -52,18 +65,18 @@ func _ready() -> void:
 	label_at("LITTLE RAY   /   BLUEBERRY REEF", Vector2(28, 15), Vector2(650, 40), 27)
 	wallet = label_at("", Vector2(30, 66), Vector2(1040, 40), 23)
 	label_at("STARTER ISLAND  ·  4 owned sectors / 8 × 8", Vector2(30, 112), Vector2(650, 32), 18)
-	label_at("BLUEBERRY  /  TIDE · COMMON", Vector2(758, 116), Vector2(320, 30), 20)
+	ray_title = label_at("BLUEBERRY  /  TIDE · COMMON", Vector2(758, 116), Vector2(320, 30), 20)
 	ray_info = label_at("", Vector2(758, 148), Vector2(320, 50), 16)
 	name_edit = LineEdit.new()
 	name_edit.position = Vector2(758, 205)
 	name_edit.size = Vector2(310, 34)
 	name_edit.max_length = 24
 	name_edit.text = city.nickname
-	name_edit.text_submitted.connect(func(value: String): act("name", value))
+	name_edit.text_submitted.connect(func(value: String): act("rename", selected_ray + ":" + value))
 	add_child(name_edit)
 	sample_button = button_at("Claim tutorial sample (+10 Gold)", Vector2(758, 246), func(): act("sample", ""))
-	collect_button = button_at("Collect resident Gold", Vector2(758, 294), func(): act("collect", ""))
-	feed_button = button_at("Feed Blueberry", Vector2(758, 342), func(): act("feed", ""))
+	collect_button = button_at("Collect resident Gold", Vector2(758, 294), func(): act("collect", selected_habitat))
+	feed_button = button_at("Feed Blueberry", Vector2(758, 342), func(): act("feed", selected_ray))
 	farm_choice = OptionButton.new()
 	farm_choice.position = Vector2(758, 398)
 	farm_choice.size = Vector2(310, 28)
@@ -89,13 +102,79 @@ func _ready() -> void:
 	cancel_build_button.add_theme_font_size_override("font_size", 15)
 	status_label = label_at("Choose a building and coordinates, or tend Blueberry and your farm.", Vector2(30, 617), Vector2(700, 34), 16)
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	label_at("DEV CHECKPOINT  ·  Session only; founder shop, breeding jobs and expansion not yet wired.", Vector2(30, 655), Vector2(1040, 22), 15)
+	label_at("DEV CHECKPOINT · Session only; random breeding, expansion and production art not yet wired.", Vector2(30, 655), Vector2(1040, 22), 15)
+	ray_choice = option_at(Vector2(30, 685), Vector2(275, 44))
+	ray_choice.item_selected.connect(choose_ray)
+	habitat_choice = option_at(Vector2(315, 685), Vector2(275, 44))
+	habitat_choice.item_selected.connect(choose_habitat)
+	move_ray_button = button_at("Move selected ray here", Vector2(600, 685), func(): act("move_ray", selected_ray + "," + selected_habitat))
+	move_ray_button.size = Vector2(235, 44)
+	move_ray_button.add_theme_font_size_override("font_size", 15)
+	label_at("Selected habitat → collect / place / move", Vector2(843, 686), Vector2(220, 44), 14).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	shop_choice = option_at(Vector2(30, 737), Vector2(275, 44))
+	for species_id in ["sunbeam", "blueberry", "mossdrop"]:
+		shop_choice.add_item("%s egg · 100 G · Lv %d" % [Model.SPECIES[species_id]["name"], Model.FOUNDER_GATES[species_id]])
+		shop_choice.set_item_metadata(shop_choice.item_count - 1, species_id)
+	shop_choice.select(0)
+	buy_button = button_at("Buy founder egg", Vector2(315, 737), func(): act("buy_founder", str(shop_choice.get_item_metadata(shop_choice.selected))))
+	buy_button.size = Vector2(180, 44)
+	buy_button.add_theme_font_size_override("font_size", 15)
+	place_egg_button = button_at("Place ready egg", Vector2(505, 737), func(): act("place_founder", selected_habitat))
+	place_egg_button.size = Vector2(180, 44)
+	place_egg_button.add_theme_font_size_override("font_size", 15)
+	egg_info = label_at("", Vector2(695, 737), Vector2(375, 44), 15)
+	egg_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	collection_info = label_at("", Vector2(30, 788), Vector2(1040, 36), 15)
 	adapter.capture(city.snapshot())
 	refresh()
 	var args := OS.get_cmdline_user_args()
 	if args.size() == 2 and args[0] == "--capture-city":
 		capture_mode = true
 		call_deferred("capture_fixture", args[1])
+
+func option_at(at: Vector2, dimensions: Vector2) -> OptionButton:
+	var control := OptionButton.new()
+	control.position = at
+	control.size = dimensions
+	control.fit_to_longest_item = false
+	control.clip_text = true
+	control.add_theme_font_size_override("font_size", 15)
+	add_child(control)
+	return control
+
+func choose_ray(index: int) -> void:
+	selected_ray = str(ray_choice.get_item_metadata(index))
+	name_edit.text = str(city.individuals[selected_ray]["nickname"])
+	refresh()
+
+func choose_habitat(index: int) -> void:
+	selected_habitat = str(habitat_choice.get_item_metadata(index))
+	refresh()
+
+func refresh_roster() -> void:
+	var key: String = str(city.individuals.keys())
+	# Include names in the key, but not changing levels or income.
+	for id in city.individuals:
+		key += str(city.individuals[id]["nickname"])
+	if key != roster_key:
+		roster_key = key
+		ray_choice.clear()
+		for id in city.individuals:
+			ray_choice.add_item("Ray: %s (%s)" % [city.individuals[id]["nickname"], id])
+			ray_choice.set_item_metadata(ray_choice.item_count - 1, id)
+			if id == selected_ray:
+				ray_choice.select(ray_choice.item_count - 1)
+	var homes: Array[String] = city.habitat_ids()
+	key = str(homes) + str(city.buildings)
+	if key != habitat_key:
+		habitat_key = key
+		habitat_choice.clear()
+		for id in homes:
+			var b: Dictionary = city.find_building(id)
+			habitat_choice.add_item("%s (%d,%d)" % [b["kind"], b["x"], b["y"]])
+			habitat_choice.set_item_metadata(habitat_choice.item_count - 1, id)
+			if id == selected_habitat:
+				habitat_choice.select(habitat_choice.item_count - 1)
 
 func coordinate_at(at: Vector2, prefix_text: String, initial: int) -> SpinBox:
 	var field := SpinBox.new()
@@ -158,11 +237,12 @@ func place_selected() -> void:
 func _process(_delta: float) -> void:
 	var now := Time.get_ticks_msec()
 	var previous_revision: int = city.revision
+	var previous_xp: int = city.xp
 	city.advance(maxi(0, now - last_ms))
 	last_ms = now
 	if city.revision != previous_revision:
 		adapter.capture(city.snapshot())
-		status_label.text = "Construction complete · +50 account XP"
+		status_label.text = "Construction complete · +%d account XP" % (city.xp - previous_xp)
 	refresh()
 
 func act(kind: String, value: String) -> void:
@@ -178,13 +258,30 @@ func act(kind: String, value: String) -> void:
 
 func refresh() -> void:
 	wallet.text = "GOLD  %d     ·     FOOD  %d     ·     ACCOUNT LV %d  (%d XP)" % [city.gold, city.food, city.account_level(), city.xp]
-	ray_info.text = "%s · Lv %d · %d/4 feed pips\n%.2f Gold/min · bin %d/500" % [city.nickname, city.level, city.pips, 2.0 * (1.0 + 0.25 * (city.level - 1)), city.stored_gold()]
+	refresh_roster()
+	var ray: Dictionary = city.individuals[selected_ray]
+	var species: Dictionary = city.ray_species(selected_ray)
+	var stats: Dictionary = city.ray_stats(selected_ray)
+	ray_title.text = "%s / %s" % [species["name"].to_upper(), species["rarity"]]
+	ray_info.text = "Lv %d · %d/4 pips · %s\nHP %d · POW %d · SPD %d · %.2f G/min" % [ray["level"], ray["pips"], "/".join(PackedStringArray(species["elements"])), stats["health"], stats["power"], stats["speed"], city.ray_rate_ticks(selected_ray) / 4.0]
 	sample_button.disabled = city.sample_claimed
-	collect_button.disabled = city.stored_gold() == 0
-	collect_button.text = "Collect %d resident Gold" % city.stored_gold()
-	var cost: int = city.feed_cost()
+	collect_button.disabled = city.stored_gold(selected_habitat) == 0
+	collect_button.text = "Collect %d Gold (selected home)" % city.stored_gold(selected_habitat)
+	var cost: int = city.feed_cost(selected_ray)
 	feed_button.disabled = cost == 0 or city.food < cost
 	feed_button.text = "Feed · %d Food" % cost if cost > 0 else "Level cap reached"
+	move_ray_button.disabled = ray["habitat_id"] == selected_habitat
+	buy_button.disabled = not city.founder_egg.is_empty() or city.gold < 100
+	place_egg_button.disabled = city.founder_egg.is_empty() or city.founder_remaining() > 0
+	if city.founder_egg.is_empty():
+		egg_info.text = "Hatchery empty · buy a founder"
+	else:
+		var egg_name: String = str(Model.SPECIES[city.founder_egg["species"]]["name"])
+		egg_info.text = "%s · %ds to hatch" % [egg_name, city.founder_remaining()] if city.founder_remaining() > 0 else "%s ready! Select compatible housing." % egg_name
+	var entries: PackedStringArray = []
+	for id in Model.SPECIES:
+		entries.append(str(Model.SPECIES[id]["name"]) + (" ✓" if city.discoveries.has(id) else " · " + str(Model.SPECIES[id]["source"])))
+	collection_info.text = "Collection %d/6  |  %s" % [city.discoveries.size(), "  |  ".join(entries)]
 	refresh_choices()
 	cancel_build_button.disabled = city.construction.is_empty()
 	var job: Dictionary = city.farm_crop(selected_farm)
@@ -248,27 +345,25 @@ func draw_building(b: Dictionary) -> void:
 			var fill: Color = Color("#4cb9c6") if kind == "tide" else (Color("#e5cf8f") if kind == "light" else Color("#9fbd76"))
 			tile(x,y,footprint,footprint,fill)
 			draw_circle(center, 43, fill.darkened(0.30))
-			if id == "tide-1":
-				# Same original temporary mascot; stable habitat ID owns its location.
-				var ray := center + Vector2(0,-7)
-				draw_polyline(PackedVector2Array([ray+Vector2(18,8),ray+Vector2(34,19),ray+Vector2(42,13)]), Color("#72cbe0"), 4, true)
-				draw_colored_polygon(PackedVector2Array([ray+Vector2(-4,0),ray+Vector2(-38,-9),ray+Vector2(-18,19),ray+Vector2(11,15),ray+Vector2(32,-6)]), Color("#6bbcdf"))
-				draw_circle(ray + Vector2(-7,1), 18, Color("#9addec"))
-				draw_circle(ray + Vector2(-15,8), 7, Color("#f5e3bc"))
-				draw_circle(ray + Vector2(-14,-3), 5, Color("#233a52"))
-				draw_circle(ray + Vector2(-15,-5), 2, Color.WHITE)
-				ink("%d G / 500" % city.stored_gold(), center + Vector2(-45,58), 15)
-				if city.stored_gold() > 0:
-					draw_circle(center + Vector2(41,-33), 14, Color("#ffce63"))
-					ink("G", center + Vector2(35,-28), 14, Color("#533e26"))
-			else:
+			var residents: Array[String] = city.resident_ids(id)
+			for i in range(residents.size()):
+				var resident: Dictionary = city.individuals[residents[i]]
+				var offset: float = 0.0 if residents.size() == 1 else -20.0 + i * 40.0
+				draw_placeholder_ray(center + Vector2(offset,-7), str(resident["species"]), 1.0 if residents.size() == 1 else 0.62)
+			if residents.is_empty():
 				ink("Empty · 0 G/min", center + Vector2(-55,7), 14)
+			ink("%d/2 · %d G" % [residents.size(), city.stored_gold(id)], center + Vector2(-44,58), 15)
+			if city.stored_gold(id) > 0:
+				draw_circle(center + Vector2(41,-33), 14, Color("#ffce63"))
+				ink("G", center + Vector2(35,-28), 14, Color("#533e26"))
 			ink(str(b["kind"]), center + Vector2(-53,-47), 16)
 		"hatchery":
 			tile(x,y,footprint,footprint,Color("#e5c58d"))
 			draw_circle(center, 27, Color("#b89d72"))
 			draw_circle(center + Vector2(0,-4), 15, Color("#eae2c8"))
 			ink("Hatchery", center + Vector2(-36,38), 16)
+			if not city.founder_egg.is_empty():
+				ink("Ready!" if city.founder_remaining() == 0 else "%ds" % city.founder_remaining(), center + Vector2(-20,-25), 14)
 		"farm":
 			tile(x,y,footprint,footprint,Color("#927c53"))
 			var job: Dictionary = city.farm_crop(id)
@@ -282,6 +377,17 @@ func draw_building(b: Dictionary) -> void:
 			draw_circle(center, 34, Color("#726d9a"))
 			ink("Grotto", center + Vector2(-27,5), 16)
 			ink("Breeding not wired", center + Vector2(-63,40), 13)
+
+func draw_placeholder_ray(ray: Vector2, species_id: String, s: float) -> void:
+	# Original temporary silhouette; final treatment remains art/audio-owned.
+	var colors: Dictionary = {"blueberry": Color("#6bbcdf"), "sunbeam": Color("#edca68"), "mossdrop": Color("#8dc079"), "pearlcloud": Color("#e8dbef"), "kelpskip": Color("#77cfb3"), "rosefin": Color("#eaa4bf")}
+	var fill: Color = colors[species_id]
+	draw_polyline(PackedVector2Array([ray+Vector2(18,8)*s,ray+Vector2(34,19)*s,ray+Vector2(42,13)*s]), fill, 4*s, true)
+	draw_colored_polygon(PackedVector2Array([ray+Vector2(-4,0)*s,ray+Vector2(-38,-9)*s,ray+Vector2(-18,19)*s,ray+Vector2(11,15)*s,ray+Vector2(32,-6)*s]), fill)
+	draw_circle(ray + Vector2(-7,1)*s, 18*s, fill.lightened(0.28))
+	draw_circle(ray + Vector2(-15,8)*s, 7*s, Color("#f5e3bc"))
+	draw_circle(ray + Vector2(-14,-3)*s, 5*s, Color("#233a52"))
+	draw_circle(ray + Vector2(-15,-5)*s, 2*s, Color.WHITE)
 
 func click_fixture(button: Button) -> void:
 	var point := button.get_global_rect().get_center()
@@ -348,4 +454,24 @@ func capture_fixture(directory: String) -> void:
 		get_tree().quit(1)
 		return
 	print("CITY_BUILD_GUI_PASS: paid Light habitat placement and ordinary 30-second construction")
+	var before_egg: int = city.gold
+	await click_fixture(buy_button)
+	if city.gold != before_egg - 100 or city.founder_egg.is_empty():
+		push_error("GUI founder purchase failed")
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(31.0).timeout
+	# Selection is set programmatically; purchase and claim use native mouse events.
+	habitat_choice.select(1)
+	choose_habitat(1)
+	await click_fixture(place_egg_button)
+	if city.individuals.size() != 2 or city.individuals["ray-2"]["species"] != "sunbeam" or city.individuals["ray-2"]["habitat_id"] != "building-1" or city.xp != 355:
+		push_error("GUI founder placement failed: " + str(city.snapshot()))
+		get_tree().quit(1)
+		return
+	await RenderingServer.frame_post_draw
+	if get_viewport().get_texture().get_image().save_png(directory + "/05-two-founders.png") != OK:
+		get_tree().quit(1)
+		return
+	print("CITY_FOUNDER_GUI_PASS: paid Sunbeam egg, ordinary 30-second incubation, compatible placement and level-three account")
 	get_tree().quit(0)

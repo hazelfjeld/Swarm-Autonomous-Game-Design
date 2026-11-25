@@ -4,6 +4,24 @@ extends RefCounted
 
 const TICKS_PER_GOLD = 240
 const SMALL_CAP = 500
+const SMALL_CAPACITY = 2
+# GDD v2 §§5–7,9: ordered elements and source-defined stat profiles.
+const SPECIES = {
+	"blueberry": {"name": "Blueberry", "elements": ["Tide"], "rarity": "Common", "role": "Attacker", "source": "Founder shop"},
+	"sunbeam": {"name": "Sunbeam", "elements": ["Light"], "rarity": "Common", "role": "Attacker", "source": "Founder shop"},
+	"mossdrop": {"name": "Mossdrop", "elements": ["Bloom"], "rarity": "Common", "role": "Tank", "source": "Founder shop"},
+	"pearlcloud": {"name": "Pearlcloud", "elements": ["Tide", "Light"], "rarity": "Rare", "role": "Support", "source": "Tide × Light"},
+	"kelpskip": {"name": "Kelpskip", "elements": ["Tide", "Bloom"], "rarity": "Uncommon", "role": "Support", "source": "Tide × Bloom"},
+	"rosefin": {"name": "Rosefin", "elements": ["Bloom", "Light"], "rarity": "Rare", "role": "Support", "source": "Bloom × Light"}
+}
+const RARITIES = {
+	"Common": {"factor_percent": 100, "gold": 2, "cap": 20},
+	"Uncommon": {"factor_percent": 112, "gold": 3, "cap": 25},
+	"Rare": {"factor_percent": 128, "gold": 5, "cap": 30}
+}
+const ROLES = {"Attacker": [100, 30, 24], "Tank": [150, 22, 16], "Support": [120, 24, 22]}
+const FOUNDER_GATES = {"blueberry": 1, "sunbeam": 1, "mossdrop": 4}
+const HABITAT_ELEMENTS = {"tide": "Tide", "light": "Light", "bloom": "Bloom"}
 const FEED_COSTS = [5, 8, 12, 17, 26, 38, 57, 86, 129]
 const CROPS = {
 	"sprout": {"name": "Sprout Kelp", "seconds": 60, "gold": 20, "food": 40, "xp": 5},
@@ -25,13 +43,38 @@ var gold: int = 1200
 var food: int = 240
 var xp: int = 0
 var revision: int = 0
-var level: int = 1
-var pips: int = 0
-var income_ticks: int = 0
+var individuals: Dictionary = {"ray-1": {
+	"id": "ray-1", "species": "blueberry", "nickname": "Blueberry", "level": 1,
+	"pips": 0, "rank": 0, "habitat_id": "tide-1", "parents": [],
+	"acquisition_receipt": "starter", "equipped_skills": [], "runes": []
+}}
+var discoveries: Dictionary = {"blueberry": true}
+var next_ray_serial: int = 2
+var habitat_bins: Dictionary = {"tide-1": {"ticks": 0, "subticks": 0}}
+# Original Blueberry fixture accessors, no duplicate mutable state.
+var level: int:
+	get:
+		return int(individuals["ray-1"]["level"])
+var pips: int:
+	get:
+		return int(individuals["ray-1"]["pips"])
+var nickname: String:
+	get:
+		return str(individuals["ray-1"]["nickname"])
+var income_ticks: int:
+	get:
+		return int(habitat_bins["tide-1"]["ticks"])
+var income_subticks: int:
+	get:
+		return int(habitat_bins["tide-1"]["subticks"])
 var elapsed_ms: int = 0
-var income_subticks: int = 0
 var sample_claimed: bool = false
-var nickname: String = "Blueberry"
+# Provisional deterministic founder-only slot for the account progression seam.
+# #23 owns random breeding, egg transfer and the integrated hatchery.
+var founder_egg: Dictionary = {}
+var tutorial_sunbeam_started: bool = false
+var founder_placed_milestone: bool = false
+var trained_founders_milestone: bool = false
 var buildings: Array = BUILDINGS.duplicate(true)
 var construction: Dictionary = {}
 var next_building_serial: int = 1
@@ -46,22 +89,120 @@ func advance(delta_ms: int) -> void:
 	if delta_ms <= 0:
 		return
 	elapsed_ms += delta_ms
-	# Fixed-point thousandths of a tick preserve production before a mid-second feed.
-	var total: int = income_subticks + delta_ms * 2 * (level + 3)
-	income_ticks = mini(SMALL_CAP * TICKS_PER_GOLD, income_ticks + floori(total / 1000.0))
-	income_subticks = 0 if income_ticks == SMALL_CAP * TICKS_PER_GOLD else total % 1000
+	# Per-bin fixed-point production; fractions remain in the original bin.
+	for habitat_id in habitat_ids():
+		var bin: Dictionary = habitat_bins[habitat_id]
+		var total: int = int(bin["subticks"]) + delta_ms * habitat_rate_ticks(habitat_id)
+		bin["ticks"] = mini(SMALL_CAP * TICKS_PER_GOLD, int(bin["ticks"]) + floori(total / 1000.0))
+		bin["subticks"] = 0 if int(bin["ticks"]) == SMALL_CAP * TICKS_PER_GOLD else total % 1000
 	if not construction.is_empty() and elapsed_ms >= int(construction["deadline_ms"]):
+		var built: Dictionary = find_building(str(construction["building_id"]))
+		if HABITAT_ELEMENTS.has(built["type"]):
+			habitat_bins[built["id"]] = {"ticks": 0, "subticks": 0}
 		xp += 50
 		construction = {}
+		_settle_trained_founders()
 		revision += 1
 
-func stored_gold() -> int:
-	return floori(income_ticks / float(TICKS_PER_GOLD))
+func habitat_ids() -> Array[String]:
+	var ids: Array[String] = []
+	for building in buildings:
+		if HABITAT_ELEMENTS.has(building["type"]) and not pending(str(building["id"])):
+			ids.append(str(building["id"]))
+	return ids
 
-func feed_cost() -> int:
-	if level >= 10:
+func resident_ids(habitat_id: String) -> Array[String]:
+	var ids: Array[String] = []
+	for id in individuals:
+		if individuals[id]["habitat_id"] == habitat_id:
+			ids.append(str(id))
+	return ids
+
+func ray_species(ray_id: String) -> Dictionary:
+	if not individuals.has(ray_id):
+		return {}
+	return SPECIES[individuals[ray_id]["species"]]
+
+func ray_rate_ticks(ray_id: String) -> int:
+	var ray: Dictionary = individuals[ray_id]
+	return int(RARITIES[ray_species(ray_id)["rarity"]]["gold"]) * (int(ray["level"]) + 3)
+
+func habitat_rate_ticks(habitat_id: String) -> int:
+	var rate: int = 0
+	for id in resident_ids(habitat_id):
+		rate += ray_rate_ticks(id)
+	return rate
+
+func stored_gold(habitat_id: String = "tide-1") -> int:
+	var bin: Dictionary = habitat_bins.get(habitat_id, {})
+	return floori(int(bin.get("ticks", 0)) / float(TICKS_PER_GOLD))
+
+func ray_stats(ray_id: String) -> Dictionary:
+	var ray: Dictionary = individuals[ray_id]
+	var species: Dictionary = ray_species(ray_id)
+	var base: Array = ROLES[species["role"]]
+	var factor: int = int(RARITIES[species["rarity"]]["factor_percent"])
+	var growth: int = 100 + 12 * (int(ray["level"]) - 1)
+	var rank_factor: int = 100 + 10 * int(ray["rank"])
+	# Positive half-up from integer numerators; no intermediate stat rounding.
+	return {"health": floori((int(base[0]) * factor * growth * rank_factor + 500000) / 1000000.0),
+		"power": floori((int(base[1]) * factor * growth * rank_factor + 500000) / 1000000.0),
+		"speed": floori((int(base[2]) * 10 + 4 * (int(ray["level"]) - 1) + int(ray["rank"]) * 10 + 5) / 10.0),
+		"stamina": 100}
+
+func feed_cost(ray_id: String = "ray-1") -> int:
+	if not individuals.has(ray_id):
 		return 0
-	return FEED_COSTS[level - 1]
+	var current: int = int(individuals[ray_id]["level"])
+	if current >= 10:
+		return 0
+	return FEED_COSTS[current - 1]
+
+func housing_error(species_id: String, habitat_id: String) -> String:
+	if not SPECIES.has(species_id):
+		return "Unknown species."
+	if not habitat_ids().has(habitat_id):
+		return "Choose a completed elemental habitat."
+	var building: Dictionary = find_building(habitat_id)
+	if not SPECIES[species_id]["elements"].has(HABITAT_ELEMENTS[building["type"]]):
+		return "Element mismatch: %s needs %s." % [SPECIES[species_id]["name"], " or ".join(PackedStringArray(SPECIES[species_id]["elements"]))]
+	if resident_ids(habitat_id).size() >= SMALL_CAPACITY:
+		return "Habitat full (2/2). Build another compatible habitat or move a resident."
+	return ""
+
+func founder_remaining() -> int:
+	if founder_egg.is_empty():
+		return 0
+	return ceili(maxi(0, int(founder_egg["deadline_ms"]) - elapsed_ms) / 1000.0)
+
+func _new_individual(species_id: String, habitat_id: String, receipt: String) -> String:
+	# Internal placement seam; caller validates acquisition and housing.
+	var id: String = "ray-%d" % next_ray_serial
+	next_ray_serial += 1
+	individuals[id] = {"id": id, "species": species_id, "nickname": SPECIES[species_id]["name"],
+		"level": 1, "pips": 0, "rank": 0, "habitat_id": habitat_id,
+		"parents": [], "acquisition_receipt": receipt, "equipped_skills": [], "runes": []}
+	discoveries[species_id] = true
+	return id
+
+func _settle_trained_founders() -> bool:
+	if trained_founders_milestone or not founder_placed_milestone:
+		return false
+	var blue_ready: bool = false
+	var sun_ready: bool = false
+	var grotto_ready: bool = false
+	for ray in individuals.values():
+		if int(ray["level"]) >= 4:
+			blue_ready = blue_ready or ray["species"] == "blueberry"
+			sun_ready = sun_ready or ray["species"] == "sunbeam"
+	for building in buildings:
+		if building["type"] == "grotto" and not pending(str(building["id"])):
+			grotto_ready = true
+	if blue_ready and sun_ready and grotto_ready:
+		trained_founders_milestone = true
+		xp += 300
+		return true
+	return false
 
 func account_level() -> int:
 	var result: int = 1
@@ -136,8 +277,17 @@ func command(kind: String, argument: String, op_id: String, expected_revision: i
 			var clean: String = argument.strip_edges()
 			if clean.is_empty() or clean.length() > 24:
 				return {"ok": false, "message": "Choose a name of 1–24 characters."}
-			nickname = clean
-			message = "Named " + nickname + "."
+			individuals["ray-1"]["nickname"] = clean
+			message = "Named " + clean + "."
+		"rename":
+			var parts: PackedStringArray = argument.split(":", true, 1)
+			if parts.size() != 2 or not individuals.has(parts[0]):
+				return {"ok": false, "message": "Choose an owned ray."}
+			var clean: String = parts[1].strip_edges()
+			if clean.is_empty() or clean.length() > 24:
+				return {"ok": false, "message": "Choose a name of 1–24 characters."}
+			individuals[parts[0]]["nickname"] = clean
+			message = "Named " + clean + "."
 		"sample":
 			if sample_claimed:
 				return {"ok": false, "message": "Tutorial sample already claimed."}
@@ -146,12 +296,57 @@ func command(kind: String, argument: String, op_id: String, expected_revision: i
 			xp += 100
 			message = "+10 tutorial Gold · +100 account XP"
 		"collect":
-			var amount: int = stored_gold()
+			var habitat_id: String = "tide-1" if argument.is_empty() else argument
+			if not habitat_ids().has(habitat_id):
+				return {"ok": false, "message": "Choose a completed habitat."}
+			var amount: int = stored_gold(habitat_id)
 			if amount <= 0:
 				return {"ok": false, "message": "No whole Gold ready yet."}
 			gold += amount
-			income_ticks -= amount * TICKS_PER_GOLD
+			habitat_bins[habitat_id]["ticks"] -= amount * TICKS_PER_GOLD
 			message = "+%d resident Gold" % amount
+		"buy_founder":
+			if not FOUNDER_GATES.has(argument):
+				return {"ok": false, "message": "Only unlocked Common founder eggs are sold here."}
+			if account_level() < int(FOUNDER_GATES[argument]):
+				return {"ok": false, "message": "Founder unlocks at account level %d." % int(FOUNDER_GATES[argument])}
+			if not founder_egg.is_empty():
+				return {"ok": false, "message": "Hatchery occupied. Place the current egg first."}
+			if gold < 100:
+				return {"ok": false, "message": "Not enough Gold for the 100-Gold founder egg."}
+			var guided: bool = argument == "sunbeam" and not tutorial_sunbeam_started
+			var seconds: int = 30 if guided else 120
+			gold -= 100
+			tutorial_sunbeam_started = tutorial_sunbeam_started or guided
+			founder_egg = {"species": argument, "deadline_ms": elapsed_ms + seconds * 1000,
+				"purchase_receipt": op_id, "tutorial": guided}
+			message = "−100 Gold · %s egg incubating (%ds)" % [SPECIES[argument]["name"], seconds]
+		"place_founder":
+			if founder_egg.is_empty() or founder_remaining() > 0:
+				return {"ok": false, "message": "Founder egg is not ready to place."}
+			var species_id: String = str(founder_egg["species"])
+			var error: String = housing_error(species_id, argument)
+			if not error.is_empty():
+				return {"ok": false, "message": error}
+			var id: String = _new_individual(species_id, argument, str(founder_egg["purchase_receipt"]))
+			message = "%s hatched at Lv 1." % individuals[id]["nickname"]
+			if bool(founder_egg["tutorial"]) and not founder_placed_milestone:
+				founder_placed_milestone = true
+				xp += 200
+				message += " +200 founder milestone XP."
+			founder_egg = {}
+		"move_ray":
+			var parts: PackedStringArray = argument.split(",")
+			if parts.size() != 2 or not individuals.has(parts[0]):
+				return {"ok": false, "message": "Choose an owned ray and target habitat."}
+			var ray: Dictionary = individuals[parts[0]]
+			if ray["habitat_id"] == parts[1]:
+				return {"ok": false, "message": "Ray already lives there."}
+			var error: String = housing_error(str(ray["species"]), parts[1])
+			if not error.is_empty():
+				return {"ok": false, "message": error}
+			ray["habitat_id"] = parts[1]
+			message = "%s moved · stored Gold stays in its original habitat." % ray["nickname"]
 		"plant":
 			var parts: PackedStringArray = argument.split(":")
 			if parts.size() > 2:
@@ -224,25 +419,35 @@ func command(kind: String, argument: String, op_id: String, expected_revision: i
 			construction = {}
 			message = "Construction canceled · +%d Gold refund" % refund
 		"feed":
-			var cost: int = feed_cost()
+			var ray_id: String = "ray-1" if argument.is_empty() else argument
+			var cost: int = feed_cost(ray_id)
 			if cost == 0 or food < cost:
-				return {"ok": false, "message": "Level cap or insufficient Food."}
+				return {"ok": false, "message": "Unknown ray, level cap or insufficient Food."}
+			var ray: Dictionary = individuals[ray_id]
 			food -= cost
-			pips += 1
-			if pips == 4:
-				pips = 0
-				level += 1
-				message = "−%d Food · level %d! Gold rate increased." % [cost, level]
+			ray["pips"] += 1
+			if int(ray["pips"]) == 4:
+				ray["pips"] = 0
+				ray["level"] += 1
+				message = "−%d Food · %s level %d! Gold rate increased." % [cost, ray["nickname"], ray["level"]]
 			else:
-				message = "−%d Food · feed pip %d/4" % [cost, pips]
+				message = "−%d Food · feed pip %d/4" % [cost, ray["pips"]]
 		_:
 			return {"ok": false, "message": "Unknown command."}
+	if _settle_trained_founders():
+		message += " +300 trained-founder milestone XP."
 	revision += 1
 	receipts[op_id] = {"kind": kind, "argument": argument, "message": message}
 	return {"ok": true, "message": message}
 
 func snapshot() -> Dictionary:
-	return {"checkpoint_schema": 1, "revision": revision, "gold": gold, "food": food, "xp": xp,
-		"individual": {"id": "ray-1", "species": "blueberry", "elements": ["Tide"], "rarity": "Common", "nickname": nickname, "level": level, "pips": pips, "habitat_id": "tide-1"},
-		"buildings": buildings.duplicate(true), "construction": construction.duplicate(true), "next_building_serial": next_building_serial, "farm_crops": farm_crops.duplicate(true), "income_ticks": income_ticks, "elapsed_ms": elapsed_ms,
-		"income_subticks": income_subticks, "sample_claimed": sample_claimed, "crop": crop.duplicate(true), "receipts": receipts.duplicate(true)}
+	return {"checkpoint_schema": 2, "revision": revision, "gold": gold, "food": food, "xp": xp,
+		"individual": individuals["ray-1"].duplicate(true), "individuals": individuals.duplicate(true),
+		"discoveries": discoveries.duplicate(true), "next_ray_serial": next_ray_serial,
+		"habitat_bins": habitat_bins.duplicate(true), "founder_egg": founder_egg.duplicate(true),
+		"tutorial_sunbeam_started": tutorial_sunbeam_started, "founder_placed_milestone": founder_placed_milestone,
+		"trained_founders_milestone": trained_founders_milestone,
+		"buildings": buildings.duplicate(true), "construction": construction.duplicate(true),
+		"next_building_serial": next_building_serial, "farm_crops": farm_crops.duplicate(true),
+		"income_ticks": income_ticks, "elapsed_ms": elapsed_ms, "income_subticks": income_subticks,
+		"sample_claimed": sample_claimed, "crop": crop.duplicate(true), "receipts": receipts.duplicate(true)}

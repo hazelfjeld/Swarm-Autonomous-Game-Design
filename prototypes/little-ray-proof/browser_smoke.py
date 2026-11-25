@@ -98,10 +98,20 @@ def desktop_journey(browser):
         enemy.focus()
         enemy.press("Enter")
         check(state(page)["battle"]["target"] == 1, "Keyboard selects a rival in 3v3 battle")
+        for _ in range(3):
+            page.locator('#view [data-act="special"]').click()
+        check([ray["signatureCooldown"] for ray in state(page)["battle"]["allies"]] == [1, 1, 1], "All three signatures have separate cooldowns")
+        expect(page.locator('#view [data-act="special"]')).to_be_disabled()
+        page.reload(wait_until="load")
+        page.locator('#nav [data-view="battle"]').click()
+        expect(page.locator('#view [data-act="special"]')).to_be_disabled()
+        page.locator('#view [data-act="attack"]').click()
+        check([ray["signatureCooldown"] for ray in state(page)["battle"]["allies"]] == [0, 1, 1], "Cooldown survives reload; Bop recovers only its acting ray")
         for _ in range(20):
             if state(page)["battle"]["finished"]:
                 break
-            page.locator('#view [data-act="special"]').click()
+            special = page.locator('#view [data-act="special"]')
+            (special if special.is_enabled() else page.locator('#view [data-act="attack"]')).click()
         check(state(page)["battle"]["won"] is True, "3v3 encounter won through UI buttons")
         page.locator('#view [data-act="endBattle"]').click()
         wallet_before = state(page)["gold"]

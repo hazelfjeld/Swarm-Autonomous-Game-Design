@@ -42,6 +42,11 @@ var selected_habitat: String = "tide-1"
 var roster_key: String = ""
 var habitat_key: String = ""
 var land_label: Label
+var favorite_button: Button
+var sell_button: Button
+var sale_note: Label
+var sale_dialog: ConfirmationDialog
+var sale_target: String = ""
 
 func label_at(value: String, position_: Vector2, size_: Vector2, font_size: int = 20) -> Label:
 	var item := Label.new()
@@ -129,6 +134,17 @@ func _ready() -> void:
 	egg_info = label_at("", Vector2(695, 737), Vector2(375, 44), 15)
 	egg_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	collection_info = label_at("", Vector2(30, 788), Vector2(1040, 36), 15)
+	favorite_button = button_at("Mark favorite", Vector2(30, 830), func(): act("set_favorite", selected_ray + (",0" if city.individuals[selected_ray].get("favorite", false) else ",1")))
+	favorite_button.size = Vector2(210, 42)
+	sell_button = button_at("Review sale", Vector2(250, 830), preview_sale)
+	sell_button.size = Vector2(235, 42)
+	sale_note = label_at("", Vector2(500, 830), Vector2(570, 42), 15)
+	sale_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sale_dialog = ConfirmationDialog.new()
+	sale_dialog.title = "Confirm permanent ray sale"
+	sale_dialog.ok_button_text = "Sell this ray"
+	sale_dialog.confirmed.connect(confirm_sale)
+	add_child(sale_dialog)
 	adapter.capture(city.snapshot())
 	refresh()
 	var args := OS.get_cmdline_user_args()
@@ -155,7 +171,26 @@ func choose_habitat(index: int) -> void:
 	selected_habitat = str(habitat_choice.get_item_metadata(index))
 	refresh()
 
+func preview_sale() -> void:
+	var error: String = city.sale_error(selected_ray)
+	if not error.is_empty():
+		status_label.text = error
+		return
+	sale_target = selected_ray
+	var ray: Dictionary = city.individuals[sale_target]
+	sale_dialog.dialog_text = "Sell %s (%s, %s, Lv %d) for %d Gold?\nThe individual and its training are lost permanently. Discovery remains." % [ray["nickname"], sale_target, city.ray_species(sale_target)["name"], ray["level"], city.sale_value(sale_target)]
+	sale_dialog.popup_centered(Vector2i(500, 180))
+
+func confirm_sale() -> void:
+	if not sale_target.is_empty():
+		var target: String = sale_target
+		sale_target = ""
+		act("sell_ray", target)
+
 func refresh_roster() -> void:
+	if not city.individuals.has(selected_ray):
+		selected_ray = str(city.individuals.keys()[0])
+		name_edit.text = str(city.individuals[selected_ray]["nickname"])
 	var key: String = str(city.individuals.keys())
 	# Include names in the key, but not changing levels or income.
 	for id in city.individuals:
@@ -169,6 +204,8 @@ func refresh_roster() -> void:
 			if id == selected_ray:
 				ray_choice.select(ray_choice.item_count - 1)
 	var homes: Array[String] = city.habitat_ids()
+	if not homes.has(selected_habitat):
+		selected_habitat = homes[0]
 	key = str(homes) + str(city.buildings)
 	if key != habitat_key:
 		habitat_key = key
@@ -206,11 +243,16 @@ func refresh_choices() -> void:
 			farm_choice.add_item("FARM %d · select slot" % (farm_choice.item_count + 1))
 			farm_choice.set_item_metadata(farm_choice.item_count - 1, id)
 		var index: int = ids.find(selected_farm)
-		if index < 0:
-			index = 0
-			selected_farm = ids[0]
-		farm_choice.select(index)
-	key = str(city.buildings) + str(city.owned_sectors) + str(city.starter_obstacle)
+		if ids.is_empty():
+			selected_farm = ""
+			farm_choice.disabled = true
+		else:
+			farm_choice.disabled = false
+			if index < 0:
+				index = 0
+				selected_farm = ids[0]
+			farm_choice.select(index)
+	key = str(city.buildings) + str(city.stored_buildings) + str(city.owned_sectors) + str(city.starter_obstacle)
 	if key != build_choice_key:
 		build_choice_key = key
 		var previous: String = selected_placement()
@@ -222,6 +264,12 @@ func refresh_choices() -> void:
 		for b in city.buildings:
 			build_choice.add_item("Move %s (%d,%d)" % [b["kind"], b["x"], b["y"]])
 			build_choice.set_item_metadata(build_choice.item_count - 1, "move:" + str(b["id"]))
+		for b in city.buildings:
+			build_choice.add_item("Store %s (%d,%d)" % [b["kind"], b["x"], b["y"]])
+			build_choice.set_item_metadata(build_choice.item_count - 1, "store_building:" + str(b["id"]))
+		for b in city.stored_buildings:
+			build_choice.add_item("Restore %s · free" % b["kind"])
+			build_choice.set_item_metadata(build_choice.item_count - 1, "restore_building:" + str(b["id"]))
 		for sx in range(4):
 			for sy in range(4):
 				if city.can_buy_sector(sx, sy):
@@ -244,7 +292,7 @@ func selected_placement() -> String:
 func place_selected() -> void:
 	var selection: PackedStringArray = selected_placement().split(":")
 	if selection.size() == 2:
-		if selection[0] == "buy_sector" or selection[0] == "clear_obstacle":
+		if selection[0] in ["buy_sector", "clear_obstacle", "store_building"]:
 			act(selection[0], selection[1])
 		else:
 			act(selection[0], "%s,%d,%d" % [selection[1], int(coordinate_x.value), int(coordinate_y.value)])
@@ -293,10 +341,10 @@ func refresh() -> void:
 	feed_button.disabled = cost == 0 or city.food < cost
 	feed_button.text = "Feed · %d Food" % cost if cost > 0 else "Level cap reached"
 	move_ray_button.disabled = ray["habitat_id"] == selected_habitat
-	buy_button.disabled = not city.founder_egg.is_empty() or city.gold < 100
+	buy_button.disabled = city.find_building("hatchery-1").is_empty() or not city.founder_egg.is_empty() or city.gold < 100
 	place_egg_button.disabled = city.founder_egg.is_empty() or city.founder_remaining() > 0
 	if city.founder_egg.is_empty():
-		egg_info.text = "Hatchery empty · buy a founder"
+		egg_info.text = "Restore hatchery from storage" if city.find_building("hatchery-1").is_empty() else "Hatchery empty · buy a founder"
 	else:
 		var egg_name: String = str(Model.SPECIES[city.founder_egg["species"]]["name"])
 		egg_info.text = "%s · %ds to hatch" % [egg_name, city.founder_remaining()] if city.founder_remaining() > 0 else "%s ready! Select compatible housing." % egg_name
@@ -304,6 +352,12 @@ func refresh() -> void:
 	for id in Model.SPECIES:
 		entries.append(str(Model.SPECIES[id]["name"]) + (" ✓" if city.discoveries.has(id) else " · " + str(Model.SPECIES[id]["source"])))
 	collection_info.text = "Collection %d/6  |  %s" % [city.discoveries.size(), "  |  ".join(entries)]
+	var marked: bool = bool(ray.get("favorite", false))
+	favorite_button.text = "Unmark favorite" if marked else "Mark favorite"
+	var sale_error: String = city.sale_error(selected_ray)
+	sell_button.disabled = not sale_error.is_empty()
+	sell_button.text = "Review sale · %d G" % city.sale_value(selected_ray)
+	sale_note.text = sale_error if not sale_error.is_empty() else "Sale needs confirmation · training lost; collection discovery retained."
 	refresh_choices()
 	land_label.text = "STARTER ISLAND · %d owned sectors / %d cells" % [city.owned_sectors.size(), city.owned_sectors.size() * 16]
 	var max_x: int = 7
@@ -315,18 +369,24 @@ func refresh() -> void:
 	coordinate_x.max_value = max_x
 	coordinate_y.max_value = max_y
 	var selection: String = selected_placement()
-	var land_action: bool = selection.begins_with("buy_sector:") or selection.begins_with("clear_obstacle:")
+	var land_action: bool = selection.begins_with("buy_sector:") or selection.begins_with("clear_obstacle:") or selection.begins_with("store_building:")
 	coordinate_x.editable = not land_action
 	coordinate_y.editable = not land_action
 	build_button.text = "Buy land · 250 G" if selection.begins_with("buy_sector:") else ("Clear · 50 G" if selection.begins_with("clear_obstacle:") else "Confirm placement")
+	if selection.begins_with("store_building:"):
+		build_button.text = "Store · no refund"
+	elif selection.begins_with("restore_building:"):
+		build_button.text = "Restore · free"
 	cancel_build_button.disabled = city.construction.is_empty()
 	cancel_build_button.text = "Cancel job" if city.construction.get("kind", "build") == "clear" else ("Cancel upgrade" if city.construction.get("kind", "build") == "upgrade" else "Cancel build")
 	var job: Dictionary = city.farm_crop(selected_farm)
 	var empty: bool = job.is_empty()
-	plant_short.disabled = not empty or city.gold < 20
-	plant_long.disabled = not empty or city.gold < 100
+	plant_short.disabled = selected_farm.is_empty() or not empty or city.gold < 20
+	plant_long.disabled = selected_farm.is_empty() or not empty or city.gold < 100
 	harvest_button.disabled = empty or city.remaining_seconds(selected_farm) > 0
 	farm_info.text = "Empty · select a paid crop" if empty else ("Ready to harvest!" if city.remaining_seconds(selected_farm) == 0 else "%s · %ds remaining" % [Model.CROPS[job["recipe"]]["name"], city.remaining_seconds(selected_farm)])
+	if selected_farm.is_empty():
+		farm_info.text = "Restore a farm from storage to plant."
 	queue_redraw()
 
 func iso(x: float, y: float) -> Vector2:
@@ -370,8 +430,10 @@ func _draw() -> void:
 		var sy: int = int(parts[1]) * 4
 		tile(sx, sy, 4, 4, Color("#628b86"))
 		ink("LAND · 250 G", iso(sx + 2, sy + 2) + Vector2(-48, 0), 16)
-	elif selection.size() == 2 and (selection[0] == "build" or selection[0] == "move"):
+	elif selection.size() == 2 and selection[0] in ["build", "move", "restore_building"]:
 		var b: Dictionary = Model.BUILD_TYPES.get(selection[1], {}) if selection[0] == "build" else city.find_building(selection[1])
+		if selection[0] == "restore_building":
+			b = city.find_stored_building(selection[1])
 		if not b.is_empty():
 			var x: int = int(coordinate_x.value)
 			var y: int = int(coordinate_y.value)
@@ -562,4 +624,46 @@ func capture_fixture(directory: String) -> void:
 		get_tree().quit(1)
 		return
 	print("CITY_LAND_GUI_PASS: paid adjacent sector, paid obstacle clearance, ordinary 60-second timer, exact XP and usable land")
+	var before_store: int = city.gold
+	for i in range(build_choice.item_count):
+		if build_choice.get_item_metadata(i) == "store_building:farm-1":
+			build_choice.select(i)
+			break
+	refresh()
+	await click_fixture(build_button)
+	if city.farm_ids().size() != 0 or city.find_stored_building("farm-1").is_empty() or city.gold != before_store or not plant_short.disabled:
+		push_error("GUI farm storage failed")
+		get_tree().quit(1)
+		return
+	for i in range(build_choice.item_count):
+		if build_choice.get_item_metadata(i) == "restore_building:farm-1":
+			build_choice.select(i)
+			break
+	coordinate_x.value = 5
+	coordinate_y.value = 3
+	refresh()
+	await click_fixture(build_button)
+	if not city.farm_ids().has("farm-1") or city.gold != before_store or city.xp != 365:
+		push_error("GUI farm restore failed")
+		get_tree().quit(1)
+		return
+	await click_fixture(favorite_button)
+	if not city.individuals[selected_ray]["favorite"] or not sell_button.disabled:
+		push_error("GUI favorite protection failed")
+		get_tree().quit(1)
+		return
+	await click_fixture(favorite_button)
+	await click_fixture(sell_button)
+	if not sale_dialog.visible or city.individuals.size() != 2 or city.gold != before_store:
+		push_error("GUI sale preview changed ownership or failed to open")
+		get_tree().quit(1)
+		return
+	# Cancel programmatically; a real click opened the confirmation, but
+	# modal confirmation input is not asserted by this native fixture.
+	sale_dialog.hide()
+	await RenderingServer.frame_post_draw
+	if get_viewport().get_texture().get_image().save_png(directory + "/07-storage-recovery.png") != OK:
+		get_tree().quit(1)
+		return
+	print("CITY_SAFEGUARD_GUI_PASS: native store/restore and favorite clicks, sale preview without removal; modal canceled programmatically")
 	get_tree().quit(0)

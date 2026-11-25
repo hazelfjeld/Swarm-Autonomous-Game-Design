@@ -28,6 +28,7 @@ const RARITIES = {
 	"Uncommon": {"factor_percent": 112, "gold": 3, "cap": 25},
 	"Rare": {"factor_percent": 128, "gold": 5, "cap": 30}
 }
+const SALE_VALUES = {"Common": 25, "Uncommon": 50, "Rare": 150}
 const ROLES = {"Attacker": [100, 30, 24], "Tank": [150, 22, 16], "Support": [120, 24, 22]}
 const FOUNDER_GATES = {"blueberry": 1, "sunbeam": 1, "mossdrop": 4}
 const HABITAT_ELEMENTS = {"tide": "Tide", "light": "Light", "bloom": "Bloom"}
@@ -55,7 +56,7 @@ var revision: int = 0
 var individuals: Dictionary = {"ray-1": {
 	"id": "ray-1", "species": "blueberry", "nickname": "Blueberry", "level": 1,
 	"pips": 0, "rank": 0, "habitat_id": "tide-1", "parents": [],
-	"acquisition_receipt": "starter", "equipped_skills": [], "runes": []
+	"acquisition_receipt": "starter", "equipped_skills": [], "runes": [], "favorite": false
 }}
 var discoveries: Dictionary = {"blueberry": true}
 var next_ray_serial: int = 2
@@ -63,13 +64,13 @@ var habitat_bins: Dictionary = {"tide-1": {"ticks": 0, "subticks": 0}}
 # Original Blueberry fixture accessors, no duplicate mutable state.
 var level: int:
 	get:
-		return int(individuals["ray-1"]["level"])
+		return int(individuals.get("ray-1", {}).get("level", 0))
 var pips: int:
 	get:
-		return int(individuals["ray-1"]["pips"])
+		return int(individuals.get("ray-1", {}).get("pips", 0))
 var nickname: String:
 	get:
-		return str(individuals["ray-1"]["nickname"])
+		return str(individuals.get("ray-1", {}).get("nickname", ""))
 var income_ticks: int:
 	get:
 		return int(habitat_bins["tide-1"]["ticks"])
@@ -85,6 +86,7 @@ var tutorial_sunbeam_started: bool = false
 var founder_placed_milestone: bool = false
 var trained_founders_milestone: bool = false
 var buildings: Array = BUILDINGS.duplicate(true)
+var stored_buildings: Array = []
 # First-island slice: four opening sectors plus exactly one adjacent purchase.
 var owned_sectors: Array[String] = ["0,0", "1,0", "0,1", "1,1"]
 var starter_obstacle: Dictionary = {}
@@ -229,7 +231,7 @@ func _new_individual(species_id: String, habitat_id: String, receipt: String) ->
 	next_ray_serial += 1
 	individuals[id] = {"id": id, "species": species_id, "nickname": SPECIES[species_id]["name"],
 		"level": 1, "pips": 0, "rank": 0, "habitat_id": habitat_id,
-		"parents": [], "acquisition_receipt": receipt, "equipped_skills": [], "runes": []}
+		"parents": [], "acquisition_receipt": receipt, "equipped_skills": [], "runes": [], "favorite": false}
 	discoveries[species_id] = true
 	return id
 
@@ -264,6 +266,48 @@ func find_building(id: String) -> Dictionary:
 			return building
 	return {}
 
+func find_stored_building(id: String) -> Dictionary:
+	for building in stored_buildings:
+		if building["id"] == id:
+			return building
+	return {}
+
+func storage_error(id: String) -> String:
+	var building: Dictionary = find_building(id)
+	if building.is_empty():
+		return "Choose a placed building."
+	if pending(id) or upgrading(id):
+		return "Finish or cancel the builder job first."
+	if HABITAT_ELEMENTS.has(building["type"]):
+		if not resident_ids(id).is_empty():
+			return "Move all residents before storing this habitat."
+		if stored_gold(id) > 0:
+			return "Collect the habitat's Gold before storing."
+	if building["type"] == "farm" and not farm_crop(id).is_empty():
+		return "Harvest the crop before storing its farm."
+	if building["type"] == "hatchery" and not founder_egg.is_empty():
+		return "Place the egg before storing the hatchery."
+	# Grotto reservations and Temple caps are not implemented in this slice;
+	# their owners must extend this guard when those systems are integrated.
+	return ""
+
+func sale_value(ray_id: String) -> int:
+	if not individuals.has(ray_id):
+		return 0
+	return int(SALE_VALUES[ray_species(ray_id)["rarity"]])
+
+func sale_error(ray_id: String) -> String:
+	if not individuals.has(ray_id):
+		return "Choose an owned ray."
+	if bool(individuals[ray_id].get("favorite", false)):
+		return "Unmark favorite before selling."
+	# All slice residents have compatible active homes. Upgrading temporarily
+	# pauses production, but the home remains active and will resume.
+	for id in individuals:
+		if id != ray_id and habitat_ids().has(str(individuals[id]["habitat_id"])):
+			return ""
+	return "Keep at least one housed Gold-producing ray."
+
 func pending(id: String) -> bool:
 	return not construction.is_empty() and construction["building_id"] == id and not upgrading(id)
 
@@ -274,7 +318,7 @@ func construction_remaining() -> int:
 
 func count_type(kind: String) -> int:
 	var count: int = 0
-	for building in buildings:
+	for building in buildings + stored_buildings:
 		if building["type"] == kind:
 			count += 1
 	return count
@@ -348,6 +392,8 @@ func command(kind: String, argument: String, op_id: String, expected_revision: i
 	var message: String = ""
 	match kind:
 		"name":
+			if not individuals.has("ray-1"):
+				return {"ok": false, "message": "Starter no longer owned; choose a ray."}
 			var clean: String = argument.strip_edges()
 			if clean.is_empty() or clean.length() > 24:
 				return {"ok": false, "message": "Choose a name of 1–24 characters."}
@@ -362,6 +408,23 @@ func command(kind: String, argument: String, op_id: String, expected_revision: i
 				return {"ok": false, "message": "Choose a name of 1–24 characters."}
 			individuals[parts[0]]["nickname"] = clean
 			message = "Named " + clean + "."
+		"set_favorite":
+			var parts: PackedStringArray = argument.split(",")
+			if parts.size() != 2 or not individuals.has(parts[0]) or not ["0", "1"].has(parts[1]):
+				return {"ok": false, "message": "Choose an owned ray and favorite state."}
+			individuals[parts[0]]["favorite"] = parts[1] == "1"
+			message = "Favorite marked." if parts[1] == "1" else "Favorite unmarked."
+		"sell_ray":
+			# Caller shows an explicit confirmation for this stable ID; guard
+			# again at commit. No level/feeding resale premium or XP reward.
+			var error: String = sale_error(argument)
+			if not error.is_empty():
+				return {"ok": false, "message": error}
+			var amount: int = sale_value(argument)
+			var sold_name: String = str(individuals[argument]["nickname"])
+			individuals.erase(argument)
+			gold += amount
+			message = "Sold %s · +%d Gold; discovery retained." % [sold_name, amount]
 		"sample":
 			if sample_claimed:
 				return {"ok": false, "message": "Tutorial sample already claimed."}
@@ -380,6 +443,8 @@ func command(kind: String, argument: String, op_id: String, expected_revision: i
 			habitat_bins[habitat_id]["ticks"] -= amount * TICKS_PER_GOLD
 			message = "+%d resident Gold" % amount
 		"buy_founder":
+			if find_building("hatchery-1").is_empty():
+				return {"ok": false, "message": "Restore the hatchery before buying an egg."}
 			if not FOUNDER_GATES.has(argument):
 				return {"ok": false, "message": "Only unlocked Common founder eggs are sold here."}
 			if account_level() < int(FOUNDER_GATES[argument]):
@@ -522,6 +587,30 @@ func command(kind: String, argument: String, op_id: String, expected_revision: i
 			building["x"] = x
 			building["y"] = y
 			message = "Moved %s · no Gold cost" % building["kind"]
+		"store_building":
+			var error: String = storage_error(argument)
+			if not error.is_empty():
+				return {"ok": false, "message": error}
+			var building: Dictionary = find_building(argument)
+			buildings.erase(building)
+			stored_buildings.append(building)
+			message = "Stored %s · no refund; restore for free." % building["kind"]
+		"restore_building":
+			var parts: PackedStringArray = argument.split(",")
+			if parts.size() != 3 or not parts[1].is_valid_int() or not parts[2].is_valid_int():
+				return {"ok": false, "message": "Invalid restore coordinates."}
+			var building: Dictionary = find_stored_building(parts[0])
+			if building.is_empty():
+				return {"ok": false, "message": "Choose a stored building."}
+			var x: int = int(parts[1])
+			var y: int = int(parts[2])
+			if not can_place(x, y, int(building["size"])):
+				return {"ok": false, "message": "Restore footprint overlaps a building or locked land."}
+			stored_buildings.erase(building)
+			building["x"] = x
+			building["y"] = y
+			buildings.append(building)
+			message = "Restored %s · no Gold or XP change." % building["kind"]
 		"cancel_build":
 			if construction.is_empty():
 				return {"ok": false, "message": "No construction to cancel."}
@@ -556,12 +645,12 @@ func command(kind: String, argument: String, op_id: String, expected_revision: i
 
 func snapshot() -> Dictionary:
 	return {"checkpoint_schema": 2, "revision": revision, "gold": gold, "food": food, "xp": xp,
-		"individual": individuals["ray-1"].duplicate(true), "individuals": individuals.duplicate(true),
+		"individual": individuals.get("ray-1", {}).duplicate(true), "individuals": individuals.duplicate(true),
 		"discoveries": discoveries.duplicate(true), "next_ray_serial": next_ray_serial,
 		"habitat_bins": habitat_bins.duplicate(true), "founder_egg": founder_egg.duplicate(true),
 		"tutorial_sunbeam_started": tutorial_sunbeam_started, "founder_placed_milestone": founder_placed_milestone,
 		"trained_founders_milestone": trained_founders_milestone,
-		"buildings": buildings.duplicate(true), "construction": construction.duplicate(true),
+		"buildings": buildings.duplicate(true), "stored_buildings": stored_buildings.duplicate(true), "construction": construction.duplicate(true),
 		"owned_sectors": owned_sectors.duplicate(), "starter_obstacle": starter_obstacle.duplicate(true),
 		"next_building_serial": next_building_serial, "farm_crops": farm_crops.duplicate(true),
 		"income_ticks": income_ticks, "elapsed_ms": elapsed_ms, "income_subticks": income_subticks,

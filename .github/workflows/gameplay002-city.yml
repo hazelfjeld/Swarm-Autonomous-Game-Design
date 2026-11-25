@@ -75,6 +75,7 @@ jobs:
           test -s "$RUNNER_TEMP/city-evidence/04-built-light-habitat.png"
           test -s "$RUNNER_TEMP/city-evidence/05-two-founders.png"
           test -s "$RUNNER_TEMP/city-evidence/06-expanded-land.png"
+          test -s "$RUNNER_TEMP/city-evidence/07-storage-recovery.png"
           git rev-parse HEAD > "$RUNNER_TEMP/city-evidence/source-commit.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()

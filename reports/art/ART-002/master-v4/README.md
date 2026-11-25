@@ -1,0 +1,17 @@
+# ART-002: Blueberry v4 — expression and motion candidate
+
+Not an approved treatment. Both old trials remain rejected and v3 remains an unapproved checkpoint. This v4 candidate retains the master body/face anchors and palette inheritance, with stronger cyan-to-blue shading, a slightly fuller near wing, a more distinct open bite and closed happy eye; wing markings move with the wing. Only one ray. No external/reference pixels or new provider use. Exact reference basis: director #7156485085 and prior verified v3 comparison; visually inspected the previous local comparison composite this run, not a fresh hash of the reference original. No front/turn pose yet.
+
+**Files:** [editable subclass](motion.js), [actual 4×2 vector atlas](feed-atlas.svg), [preview](preview.html). Source uses the unchanged v3 base (blob 50c17c73897f8928400afa884fa7347b0963f362). Rebuild from this folder:
+
+```sh
+node -e "process.stdout.write(new (require('./motion.js').AnimatedManta)().atlas())" > feed-atlas.svg
+```
+
+Proposed import: 1024×512 atlas, 4 columns × 2 rows of 256×256, row-major 0–7; transparent padding; centered (128,128) pivot; smooth filter; 110ms frame, 880ms sequence; final standalone frame identical to first. This is a candidate, not an agreed engine contract. Keep atlas sampling within the cell. No separate mask files yet. Keep layer groups and color tokens in the generator for future approved changes.
+
+**Executed:** locally ran Node 22 and CairoSVG 2.8.2 to render standalone cells and the full atlas, with Pillow RGBA comparison. Source blob 4572fa2cd0e4278bef741cb2f4b90437a73ba3d1 and atlas blob b009956455e04fb77478328ece35eceb98b39798 (local Git hash-object); both matched remote file readback. All standalone bounds x=[10,245) and y within [70,175); no edge clipping. Frame 0/7 standalone byte-identical. Full atlas crops match standalone alpha exactly, differ by at most 1 RGB channel value at 1–5 pixels per noninitial cell (rasterizer rounding). Eight-frame static native/96px review directly inspected; no perceptual clip or detached silhouette observed. Expression changes small at gameplay size. JS generation: 8 frames, unique IDs, resolved local references, deterministic, exact standalone idle return. Controlled mock-DOM preview logic: 17 assertions passed (timer, per-frame background offsets, busy guard, one debit, reset, reduced-motion cap, no fifth feed, mid-animation cancellation). Preview readback blob 25f15be435bb85e9fd6336db12ec3b07a55f674a matches executed source. This is not browser interaction or Godot import. No audio, human acceptance, true host size, actual game play, separate cosmetic masks, exact total artist effort or complete turn animation verified. Do not interpret technical checks as visual approval.
+
+**Next:** independent QA/director compare candidate and reference at actual displayed size, evaluate facial readability; continue authorized front/turn and export/runtime checks. No roster multiplication until style and ARCH-002 gates are satisfied.
+
+Skill: game-designer at hazelfjeld/Game-Design-AI-Skill@dc26ddb18adc18fbbe2221a8443a71a260de6022; full SKILL.md, production-and-collaboration, game-feel-and-accessibility, design-foundations fetched at pin; no retrieval failure. Applied one bounded comparison, shared pose anatomy and reduced-motion feedback. Local Git remote DNS failed and gh unavailable; authenticated connector delivery used.

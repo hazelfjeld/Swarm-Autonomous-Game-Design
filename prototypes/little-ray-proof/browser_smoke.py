@@ -34,6 +34,32 @@ def open_game(context, errors=None):
     return page
 
 
+def tab_to(page, selector):
+    """Traverse real keyboard focus order, anchored before the main view."""
+    page.locator("#reset").focus()
+    target = page.locator(selector)
+    for _ in range(20):
+        page.keyboard.press("Tab")
+        if target.evaluate("(node) => document.activeElement === node"):
+            return target
+    raise AssertionError("Keyboard Tab never reached " + selector)
+
+
+def hold_focus_two_ticks(page, target, label):
+    """Observe two distinct real idle ticks without replacing the focused DOM node."""
+    expect(target).to_be_focused()
+    original = target.element_handle()
+    for _ in range(2):
+        before = state(page)["lastTick"]
+        page.wait_for_function(
+            "(before) => window.LittleRayDebug.getState().lastTick > before",
+            arg=before, timeout=6000
+        )
+        check(original.evaluate("(node) => node.isConnected && document.activeElement === node"),
+              label + " retains the same focused node on a real tick")
+    original.dispose()
+
+
 def desktop_journey(browser):
     context = browser.new_context(viewport={"width": 1280, "height": 900})
     errors = []
@@ -49,8 +75,12 @@ def desktop_journey(browser):
         after_collect = state(page)["gold"]
         check(after_collect > initial_gold, "Resident Gold accrues in real time and is collected by click")
         initial_food = state(page)["food"]
-        for plot in (0, 1):
-            page.locator(f'#view [data-act="plant"][data-i="{plot}"]').click()
+        page.locator('#view [data-act="plant"][data-i="0"]').click()
+        plant = tab_to(page, '#view [data-act="plant"][data-i="1"]')
+        hold_focus_two_ticks(page, plant, "Second farm while first crop grows")
+        check(state(page)["crops"][0] is not None and state(page)["crops"][1] is None,
+              "First crop remains growing before second planting")
+        page.keyboard.press("Space")
         check(state(page)["gold"] == after_collect - 80, "Both plots charge their planting cost exactly once")
         check(state(page)["food"] == initial_food, "Planting grants no premature Food")
         expect(page.locator('#view [data-crop="0"]')).to_be_disabled()
@@ -65,28 +95,39 @@ def desktop_journey(browser):
         check(state(page)["food"] == initial_food + 130 and state(page)["crops"] == [None, None],
               "Both crops mature on real timers and grant Food once")
         page.locator('#nav [data-view="rays"]').click()
-        feed = page.locator('#view [data-act="feed"][data-i="1"]')
-        feed.focus()
-        tick_before = state(page)["lastTick"]
-        page.wait_for_function("(before) => window.LittleRayDebug.getState().lastTick > before", arg=tick_before)
+        feed = tab_to(page, '#view [data-act="feed"][data-i="1"]')
+        hold_focus_two_ticks(page, feed, "Blueberry Feed")
+        before_feed = state(page)
+        page.keyboard.press("Space")
+        check(state(page)["food"] == before_feed["food"] - 20
+              and state(page)["rays"][0]["xp"] == before_feed["rays"][0]["xp"] + 1,
+              "A single keyboard Space activation feeds only the intended ray once")
         expect(feed).to_be_focused()
-        check(True, "Keyboard focus survives a real idle timer tick")
-        for ray in (1, 2):
-            for _ in range(2):
-                page.locator(f'#view [data-act="feed"][data-i="{ray}"]').click()
+        page.keyboard.press("Enter")
+        for _ in range(2):
+            page.locator('#view [data-act="feed"][data-i="2"]').click()
         check([ray["lv"] for ray in state(page)["rays"]] == [4, 4], "Founders level to four via clicks")
         page.locator('#nav [data-view="nursery"]').click()
-        page.locator('#view [data-act="breed"]').click()
+        tab_to(page, '#view [data-act="breed"]')
+        page.keyboard.press("Enter")
         check(state(page)["breed"]["kind"] == "pearlcloud", "First pairing commits Pearlcloud")
+        nursery_nav = page.locator('#nav [data-view="nursery"]')
+        expect(nursery_nav).to_be_focused()
+        hold_focus_two_ticks(page, nursery_nav, "Nursery navigation fallback during pairing")
         transfer = page.locator('#view [data-act="transfer"]')
         expect(transfer).to_be_disabled()
         expect(transfer).to_be_enabled(timeout=25000)
-        transfer.click()
+        tab_to(page, '#view [data-act="transfer"]')
+        page.keyboard.press("Space")
         check(state(page)["hatch"]["kind"] == "pearlcloud", "Egg transferred to separate hatchery")
+        next_pair = page.locator('#view [data-act="breed"]')
+        expect(next_pair).to_be_focused()
+        hold_focus_two_ticks(page, next_pair, "Available pairing control during incubation")
         claim = page.locator('#view [data-act="claim"]')
         expect(claim).to_be_disabled()
         expect(claim).to_be_enabled(timeout=20000)
-        claim.click()
+        tab_to(page, '#view [data-act="claim"]')
+        page.keyboard.press("Enter")
         check(len(state(page)["rays"]) == 3, "Hatching grants exactly one ray")
         page.locator('#nav [data-view="rays"]').click()
         for _ in range(6):
@@ -94,11 +135,18 @@ def desktop_journey(browser):
         check(state(page)["rays"][2]["lv"] == 4, "Hatched Pearlcloud trained to level four through UI")
         page.locator('#nav [data-view="battle"]').click()
         page.locator('#view [data-act="startBattle"]').click()
-        enemy = page.locator('#view [data-act="target"][data-i="1"]')
-        enemy.focus()
-        enemy.press("Enter")
+        enemy = tab_to(page, '#view [data-act="target"][data-i="1"]')
+        hold_focus_two_ticks(page, enemy, "Non-default rival")
+        page.keyboard.press("Enter")
         check(state(page)["battle"]["target"] == 1, "Keyboard selects a rival in 3v3 battle")
-        for _ in range(3):
+        expect(enemy).to_have_attribute("aria-pressed", "true")
+        hp = [foe["hp"] for foe in state(page)["battle"]["foes"]]
+        tab_to(page, '#view [data-act="special"]')
+        page.keyboard.press("Space")
+        after_hp = [foe["hp"] for foe in state(page)["battle"]["foes"]]
+        check(after_hp == [hp[0], hp[1] - 22, hp[2]],
+              "Keyboard Signature damages exactly the selected non-default rival once")
+        for _ in range(2):
             page.locator('#view [data-act="special"]').click()
         check([ray["signatureCooldown"] for ray in state(page)["battle"]["allies"]] == [1, 1, 1], "All three signatures have separate cooldowns")
         expect(page.locator('#view [data-act="special"]')).to_be_disabled()

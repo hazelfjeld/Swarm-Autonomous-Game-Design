@@ -41,6 +41,7 @@ var selected_ray: String = "ray-1"
 var selected_habitat: String = "tide-1"
 var roster_key: String = ""
 var habitat_key: String = ""
+var land_label: Label
 
 func label_at(value: String, position_: Vector2, size_: Vector2, font_size: int = 20) -> Label:
 	var item := Label.new()
@@ -65,7 +66,7 @@ func _ready() -> void:
 	last_ms = Time.get_ticks_msec()
 	label_at("LITTLE RAY   /   BLUEBERRY REEF", Vector2(28, 15), Vector2(650, 40), 27)
 	wallet = label_at("", Vector2(30, 66), Vector2(1040, 40), 23)
-	label_at("STARTER ISLAND  ·  4 owned sectors / 8 × 8", Vector2(30, 112), Vector2(650, 32), 18)
+	land_label = label_at("STARTER ISLAND  ·  4 owned sectors / 8 × 8", Vector2(30, 112), Vector2(650, 32), 18)
 	ray_title = label_at("BLUEBERRY  /  TIDE · COMMON", Vector2(758, 116), Vector2(320, 30), 20)
 	ray_info = label_at("", Vector2(758, 148), Vector2(320, 50), 16)
 	name_edit = LineEdit.new()
@@ -103,7 +104,7 @@ func _ready() -> void:
 	cancel_build_button.add_theme_font_size_override("font_size", 15)
 	status_label = label_at("Choose a building and coordinates, or tend Blueberry and your farm.", Vector2(30, 617), Vector2(700, 34), 16)
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	label_at("DEV CHECKPOINT · Session only; random breeding, expansion and production art not yet wired.", Vector2(30, 655), Vector2(1040, 22), 15)
+	label_at("DEV CHECKPOINT · Session only; random breeding, battle and production art not yet wired.", Vector2(30, 655), Vector2(1040, 22), 15)
 	ray_choice = option_at(Vector2(30, 685), Vector2(275, 44))
 	ray_choice.item_selected.connect(choose_ray)
 	habitat_choice = option_at(Vector2(315, 685), Vector2(275, 44))
@@ -209,7 +210,7 @@ func refresh_choices() -> void:
 			index = 0
 			selected_farm = ids[0]
 		farm_choice.select(index)
-	key = str(city.buildings)
+	key = str(city.buildings) + str(city.owned_sectors) + str(city.starter_obstacle)
 	if key != build_choice_key:
 		build_choice_key = key
 		var previous: String = selected_placement()
@@ -221,6 +222,14 @@ func refresh_choices() -> void:
 		for b in city.buildings:
 			build_choice.add_item("Move %s (%d,%d)" % [b["kind"], b["x"], b["y"]])
 			build_choice.set_item_metadata(build_choice.item_count - 1, "move:" + str(b["id"]))
+		for sx in range(4):
+			for sy in range(4):
+				if city.can_buy_sector(sx, sy):
+					build_choice.add_item("Buy land (%d,%d) · 250 G" % [sx * 4, sy * 4])
+					build_choice.set_item_metadata(build_choice.item_count - 1, "buy_sector:%d,%d" % [sx, sy])
+		if not city.starter_obstacle.is_empty() and not city.starter_obstacle["cleared"]:
+			build_choice.add_item("Clear obstacle · 50 G · 1m")
+			build_choice.set_item_metadata(build_choice.item_count - 1, "clear_obstacle:starter-obstacle")
 		for i in range(build_choice.item_count):
 			if str(build_choice.get_item_metadata(i)) == previous:
 				build_choice.select(i)
@@ -235,7 +244,10 @@ func selected_placement() -> String:
 func place_selected() -> void:
 	var selection: PackedStringArray = selected_placement().split(":")
 	if selection.size() == 2:
-		act(selection[0], "%s,%d,%d" % [selection[1], int(coordinate_x.value), int(coordinate_y.value)])
+		if selection[0] == "buy_sector" or selection[0] == "clear_obstacle":
+			act(selection[0], selection[1])
+		else:
+			act(selection[0], "%s,%d,%d" % [selection[1], int(coordinate_x.value), int(coordinate_y.value)])
 
 func _process(_delta: float) -> void:
 	var now := Time.get_ticks_msec()
@@ -245,7 +257,7 @@ func _process(_delta: float) -> void:
 	last_ms = now
 	if city.revision != previous_revision:
 		adapter.capture(city.snapshot())
-		status_label.text = "Construction complete · +%d account XP" % (city.xp - previous_xp)
+		status_label.text = "Builder job complete · +%d account XP" % (city.xp - previous_xp)
 	refresh()
 
 func act(kind: String, value: String) -> void:
@@ -293,8 +305,22 @@ func refresh() -> void:
 		entries.append(str(Model.SPECIES[id]["name"]) + (" ✓" if city.discoveries.has(id) else " · " + str(Model.SPECIES[id]["source"])))
 	collection_info.text = "Collection %d/6  |  %s" % [city.discoveries.size(), "  |  ".join(entries)]
 	refresh_choices()
+	land_label.text = "STARTER ISLAND · %d owned sectors / %d cells" % [city.owned_sectors.size(), city.owned_sectors.size() * 16]
+	var max_x: int = 7
+	var max_y: int = 7
+	for key in city.owned_sectors:
+		var parts: PackedStringArray = key.split(",")
+		max_x = maxi(max_x, int(parts[0]) * 4 + 3)
+		max_y = maxi(max_y, int(parts[1]) * 4 + 3)
+	coordinate_x.max_value = max_x
+	coordinate_y.max_value = max_y
+	var selection: String = selected_placement()
+	var land_action: bool = selection.begins_with("buy_sector:") or selection.begins_with("clear_obstacle:")
+	coordinate_x.editable = not land_action
+	coordinate_y.editable = not land_action
+	build_button.text = "Buy land · 250 G" if selection.begins_with("buy_sector:") else ("Clear · 50 G" if selection.begins_with("clear_obstacle:") else "Confirm placement")
 	cancel_build_button.disabled = city.construction.is_empty()
-	cancel_build_button.text = "Cancel upgrade" if city.construction.get("kind", "build") == "upgrade" else "Cancel build"
+	cancel_build_button.text = "Cancel job" if city.construction.get("kind", "build") == "clear" else ("Cancel upgrade" if city.construction.get("kind", "build") == "upgrade" else "Cancel build")
 	var job: Dictionary = city.farm_crop(selected_farm)
 	var empty: bool = job.is_empty()
 	plant_short.disabled = not empty or city.gold < 20
@@ -304,7 +330,8 @@ func refresh() -> void:
 	queue_redraw()
 
 func iso(x: float, y: float) -> Vector2:
-	return Vector2(370 + (x - y) * 38, 186 + (x + y) * 20)
+	var zoom: float = 0.72 if city.owned_sectors.size() > 4 or selected_placement().begins_with("buy_sector:") else 1.0
+	return Vector2(370 + (x - y) * 38 * zoom, 186 + (x + y) * 20 * zoom)
 
 func tile(x: float, y: float, w: float, h: float, fill: Color) -> void:
 	var points := PackedVector2Array([iso(x,y),iso(x+w,y),iso(x+w,y+h),iso(x,y+h)])
@@ -318,17 +345,32 @@ func _draw() -> void:
 	draw_rect(Rect2(18, 109, 716, 456), Color("#12617a"))
 	draw_circle(Vector2(370, 345), 220, Color("#197d8c"))
 	draw_rect(Rect2(744, 109, 340, 508), Color("#183d4b"))
-	for y in range(8):
-		for x in range(8):
-			tile(x, y, 1, 1, Color("#8bc879") if (x+y)%2 == 0 else Color("#81bd73"))
-	for x in [0,4]:
-		for y in [0,4]:
-			var points := PackedVector2Array([iso(x,y),iso(x+4,y),iso(x+4,y+4),iso(x,y+4),iso(x,y)])
-			draw_polyline(points, Color("#d9e4a2"), 2.4, true)
+	for key in city.owned_sectors:
+		var parts: PackedStringArray = key.split(",")
+		var sx: int = int(parts[0]) * 4
+		var sy: int = int(parts[1]) * 4
+		for y in range(sy, sy + 4):
+			for x in range(sx, sx + 4):
+				tile(x, y, 1, 1, Color("#8bc879") if (x+y)%2 == 0 else Color("#81bd73"))
+		var points := PackedVector2Array([iso(sx,sy),iso(sx+4,sy),iso(sx+4,sy+4),iso(sx,sy+4),iso(sx,sy)])
+		draw_polyline(points, Color("#d9e4a2"), 2.4, true)
+	if not city.starter_obstacle.is_empty() and not city.starter_obstacle["cleared"]:
+		var ox: int = city.starter_obstacle["x"]
+		var oy: int = city.starter_obstacle["y"]
+		tile(ox, oy, 1, 1, Color("#9a8879"))
+		var center := iso(ox + 0.5, oy + 0.5)
+		draw_circle(center, 12, Color("#61564f"))
+		ink("Clearing %ds" % city.clearance_remaining() if city.clearance_remaining() > 0 else "Rock · 50 G", center + Vector2(-43, -15), 14)
 	for building in city.buildings:
 		draw_building(building)
 	var selection: PackedStringArray = selected_placement().split(":")
-	if selection.size() == 2:
+	if selection.size() == 2 and selection[0] == "buy_sector":
+		var parts: PackedStringArray = selection[1].split(",")
+		var sx: int = int(parts[0]) * 4
+		var sy: int = int(parts[1]) * 4
+		tile(sx, sy, 4, 4, Color("#628b86"))
+		ink("LAND · 250 G", iso(sx + 2, sy + 2) + Vector2(-48, 0), 16)
+	elif selection.size() == 2 and (selection[0] == "build" or selection[0] == "move"):
 		var b: Dictionary = Model.BUILD_TYPES.get(selection[1], {}) if selection[0] == "build" else city.find_building(selection[1])
 		if not b.is_empty():
 			var x: int = int(coordinate_x.value)
@@ -337,7 +379,7 @@ func _draw() -> void:
 			var valid: bool = city.can_place(x, y, footprint, selection[1] if selection[0] == "move" else "")
 			var points := PackedVector2Array([iso(x,y),iso(x+footprint,y),iso(x+footprint,y+footprint),iso(x,y+footprint),iso(x,y)])
 			draw_polyline(points, Color("#f3ffe0") if valid else Color("#ffac75"), 3.0, true)
-	ink("Placement: X ↘  Y ↙ · white = free / orange = blocked · 8 × 8 land", Vector2(37, 542), 16)
+	ink("Placement: X ↘  Y ↙ · white = free / orange = blocked", Vector2(37, 542), 16)
 
 func draw_building(b: Dictionary) -> void:
 	var x: float = float(b["x"])
@@ -487,4 +529,37 @@ func capture_fixture(directory: String) -> void:
 		get_tree().quit(1)
 		return
 	print("CITY_FOUNDER_GUI_PASS: paid Sunbeam egg, ordinary 30-second incubation, compatible placement and level-three account")
+	# Menu selection is programmatic; the confirm button uses native mouse events.
+	for i in range(build_choice.item_count):
+		if build_choice.get_item_metadata(i) == "buy_sector:2,0":
+			build_choice.select(i)
+			break
+	refresh()
+	var before_land: int = city.gold
+	await click_fixture(build_button)
+	if city.gold != before_land - 250 or not city.owned_sectors.has("2,0") or city.starter_obstacle.is_empty():
+		push_error("GUI sector purchase failed")
+		get_tree().quit(1)
+		return
+	for i in range(build_choice.item_count):
+		if build_choice.get_item_metadata(i) == "clear_obstacle:starter-obstacle":
+			build_choice.select(i)
+			break
+	refresh()
+	var before_clear: int = city.gold
+	await click_fixture(build_button)
+	if city.gold != before_clear - 50 or city.clearance_remaining() <= 0 or city.can_place(9,1,1):
+		push_error("GUI obstacle start failed")
+		get_tree().quit(1)
+		return
+	await get_tree().create_timer(61.0).timeout
+	if not city.starter_obstacle["cleared"] or not city.can_place(9,1,1) or city.xp != 365:
+		push_error("GUI clearance deadline failed")
+		get_tree().quit(1)
+		return
+	await RenderingServer.frame_post_draw
+	if get_viewport().get_texture().get_image().save_png(directory + "/06-expanded-land.png") != OK:
+		get_tree().quit(1)
+		return
+	print("CITY_LAND_GUI_PASS: paid adjacent sector, paid obstacle clearance, ordinary 60-second timer, exact XP and usable land")
 	get_tree().quit(0)

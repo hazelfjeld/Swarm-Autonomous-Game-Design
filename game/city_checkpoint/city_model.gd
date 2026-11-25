@@ -10,6 +10,10 @@ const LARGE_CAP = 5000
 const LARGE_COST = 600
 const LARGE_DURATION_MS = 300000
 const LARGE_GATE = 5
+const SECTOR_COST = 250
+const OBSTACLE_COST = 50
+const OBSTACLE_DURATION_MS = 60000
+const ISLAND_SIZE = 16
 # GDD v2 §§5–7,9: ordered elements and source-defined stat profiles.
 const SPECIES = {
 	"blueberry": {"name": "Blueberry", "elements": ["Tide"], "rarity": "Common", "role": "Attacker", "source": "Founder shop"},
@@ -81,6 +85,9 @@ var tutorial_sunbeam_started: bool = false
 var founder_placed_milestone: bool = false
 var trained_founders_milestone: bool = false
 var buildings: Array = BUILDINGS.duplicate(true)
+# First-island slice: four opening sectors plus exactly one adjacent purchase.
+var owned_sectors: Array[String] = ["0,0", "1,0", "0,1", "1,1"]
+var starter_obstacle: Dictionary = {}
 var construction: Dictionary = {}
 var next_building_serial: int = 1
 var farm_crops: Dictionary = {}
@@ -115,6 +122,12 @@ func _produce(delta_ms: int) -> void:
 		bin["subticks"] = 0 if int(bin["ticks"]) == cap_ticks else total % 1000
 
 func _finish_construction() -> void:
+	if construction.get("kind", "build") == "clear":
+		starter_obstacle["cleared"] = true
+		xp += 10
+		construction = {}
+		revision += 1
+		return
 	var built: Dictionary = find_building(str(construction["building_id"]))
 	if construction.get("kind", "build") == "upgrade":
 		built["tier"] = 2
@@ -282,9 +295,35 @@ func remaining_seconds(farm_id: String = "farm-1") -> int:
 		return 0
 	return ceili(maxi(0, int(job["deadline_ms"]) - elapsed_ms) / 1000.0)
 
-func can_place(x: int, y: int, footprint: int, ignore_id: String = "") -> bool:
-	if footprint <= 0 or x < 0 or y < 0 or x + footprint > 8 or y + footprint > 8:
+func sector_key(sx: int, sy: int) -> String:
+	return "%d,%d" % [sx, sy]
+
+func owns_cell(x: int, y: int) -> bool:
+	return x >= 0 and y >= 0 and x < ISLAND_SIZE and y < ISLAND_SIZE and owned_sectors.has(sector_key(floori(x / 4.0), floori(y / 4.0)))
+
+func can_buy_sector(sx: int, sy: int) -> bool:
+	if owned_sectors.size() >= 5 or sx < 0 or sy < 0 or sx >= 4 or sy >= 4 or owned_sectors.has(sector_key(sx, sy)):
 		return false
+	for d in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+		if owned_sectors.has(sector_key(sx + d.x, sy + d.y)):
+			return true
+	return false
+
+func clearance_remaining() -> int:
+	return construction_remaining() if construction.get("kind", "build") == "clear" else 0
+
+func can_place(x: int, y: int, footprint: int, ignore_id: String = "") -> bool:
+	if footprint <= 0 or x < 0 or y < 0 or x + footprint > ISLAND_SIZE or y + footprint > ISLAND_SIZE:
+		return false
+	for cx in range(x, x + footprint):
+		for cy in range(y, y + footprint):
+			if not owns_cell(cx, cy):
+				return false
+	if not starter_obstacle.is_empty() and not starter_obstacle["cleared"]:
+		var ox: int = starter_obstacle["x"]
+		var oy: int = starter_obstacle["y"]
+		if x <= ox and x + footprint > ox and y <= oy and y + footprint > oy:
+			return false
 	for b in buildings:
 		if b["id"] == ignore_id:
 			continue
@@ -430,6 +469,31 @@ func command(kind: String, argument: String, op_id: String, expected_revision: i
 			buildings.append({"id": id, "type": parts[0], "kind": spec["kind"], "x": x, "y": y, "size": spec["size"]})
 			construction = {"building_id": id, "deadline_ms": elapsed_ms + int(spec["seconds"]) * 1000, "cost": spec["gold"]}
 			message = "−%d Gold · Building %s (%ds)" % [spec["gold"], spec["kind"], spec["seconds"]]
+		"buy_sector":
+			var parts: PackedStringArray = argument.split(",")
+			if parts.size() != 2 or not parts[0].is_valid_int() or not parts[1].is_valid_int():
+				return {"ok": false, "message": "Choose a valid adjacent sector."}
+			var sx: int = int(parts[0])
+			var sy: int = int(parts[1])
+			if not can_buy_sector(sx, sy):
+				return {"ok": false, "message": "Land must share an edge; this slice allows one purchase."}
+			if gold < SECTOR_COST:
+				return {"ok": false, "message": "First sector costs 250 Gold."}
+			gold -= SECTOR_COST
+			owned_sectors.append(sector_key(sx, sy))
+			# Provisional one-cell obstacle footprint inside the purchased sector.
+			starter_obstacle = {"id": "starter-obstacle", "x": sx * 4 + 1, "y": sy * 4 + 1, "cleared": false}
+			message = "−250 Gold · Sector purchased permanently. Clear its obstacle for 50 Gold."
+		"clear_obstacle":
+			if argument != "starter-obstacle" or starter_obstacle.is_empty() or starter_obstacle["cleared"]:
+				return {"ok": false, "message": "No uncleared starter obstacle."}
+			if not construction.is_empty():
+				return {"ok": false, "message": "Builder busy; wait or cancel."}
+			if gold < OBSTACLE_COST:
+				return {"ok": false, "message": "Obstacle clearance costs 50 Gold."}
+			gold -= OBSTACLE_COST
+			construction = {"kind": "clear", "building_id": "starter-obstacle", "deadline_ms": elapsed_ms + OBSTACLE_DURATION_MS, "cost": OBSTACLE_COST}
+			message = "−50 Gold · Clearing obstacle (60s)."
 		"upgrade_habitat":
 			if not habitat_ids().has(argument):
 				return {"ok": false, "message": "Choose a completed elemental habitat."}
@@ -463,7 +527,7 @@ func command(kind: String, argument: String, op_id: String, expected_revision: i
 				return {"ok": false, "message": "No construction to cancel."}
 			var building: Dictionary = find_building(str(construction["building_id"]))
 			var refund: int = floori(int(construction["cost"]) * 0.8)
-			if construction.get("kind", "build") != "upgrade":
+			if construction.get("kind", "build") == "build":
 				buildings.erase(building)
 			gold += refund
 			construction = {}
@@ -498,6 +562,7 @@ func snapshot() -> Dictionary:
 		"tutorial_sunbeam_started": tutorial_sunbeam_started, "founder_placed_milestone": founder_placed_milestone,
 		"trained_founders_milestone": trained_founders_milestone,
 		"buildings": buildings.duplicate(true), "construction": construction.duplicate(true),
+		"owned_sectors": owned_sectors.duplicate(), "starter_obstacle": starter_obstacle.duplicate(true),
 		"next_building_serial": next_building_serial, "farm_crops": farm_crops.duplicate(true),
 		"income_ticks": income_ticks, "elapsed_ms": elapsed_ms, "income_subticks": income_subticks,
 		"sample_claimed": sample_claimed, "crop": crop.duplicate(true), "receipts": receipts.duplicate(true)}

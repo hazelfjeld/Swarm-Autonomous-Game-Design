@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "director",
-  "generation": 52,
-  "run_id": null,
-  "acquired_at": null,
-  "expires_at": null
+  "generation": 53,
+  "run_id": "mountain-mover-browser-economy-20261125T1943Z",
+  "acquired_at": "2026-11-25T19:43:45.018Z",
+  "expires_at": "2026-11-25T20:13:45.018Z"
 }

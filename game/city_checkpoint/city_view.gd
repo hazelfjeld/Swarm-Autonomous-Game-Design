@@ -38,6 +38,8 @@ var move_ray_button: Button
 var upgrade_button: Button
 var egg_info: Label
 var collection_info: Label
+var collection_button: Button
+var collection_dialog: AcceptDialog
 var selected_ray: String = "ray-1"
 var selected_habitat: String = "tide-1"
 var roster_key: String = ""
@@ -152,7 +154,13 @@ func _ready() -> void:
 	place_egg_button.add_theme_font_size_override("font_size", 15)
 	egg_info = label_at("", Vector2(695, 737), Vector2(375, 44), 15)
 	egg_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	collection_info = label_at("", Vector2(30, 788), Vector2(1040, 36), 15)
+	collection_info = label_at("", Vector2(30, 788), Vector2(740, 36), 15)
+	collection_button = button_at("Open Collection Book", Vector2(800, 784), open_collection)
+	collection_button.size = Vector2(268, 44)
+	collection_dialog = AcceptDialog.new()
+	collection_dialog.title = "Collection Book · six-species slice"
+	collection_dialog.ok_button_text = "Back to island"
+	add_child(collection_dialog)
 	favorite_button = button_at("Mark favorite", Vector2(30, 830), func(): act("set_favorite", selected_ray + (",0" if city.individuals[selected_ray].get("favorite", false) else ",1")))
 	favorite_button.size = Vector2(210, 42)
 	sell_button = button_at("Review sale", Vector2(250, 830), preview_sale)
@@ -189,6 +197,33 @@ func choose_ray(index: int) -> void:
 func choose_habitat(index: int) -> void:
 	selected_habitat = str(habitat_choice.get_item_metadata(index))
 	refresh()
+
+# Read-only projection: discoveries survive sale; owned copies are counted separately.
+func collection_text() -> String:
+	var lines := PackedStringArray()
+	lines.append("%d of %d species discovered · %d rays owned" % [city.discoveries.size(), Model.SPECIES.size(), city.individuals.size()])
+	lines.append("")
+	for id in Model.SPECIES:
+		var species: Dictionary = Model.SPECIES[id]
+		var copies: int = 0
+		for individual in city.individuals.values():
+			if individual["species"] == id:
+				copies += 1
+		var discovery: String = "Discovered" if city.discoveries.has(id) else "Undiscovered"
+		var source_hint: String = str(species["source"])
+		if Model.FOUNDER_GATES.has(id):
+			source_hint += " · 100 Gold · account Lv %d" % int(Model.FOUNDER_GATES[id])
+		else:
+			source_hint += " · breeding not yet available"
+		lines.append("%s · %s · %s" % [species["name"], species["rarity"], "/".join(PackedStringArray(species["elements"]))])
+		lines.append("    %s · Owned: %d · %s" % [discovery, copies, source_hint])
+	lines.append("")
+	lines.append("Discovery is retained if you sell your last copy of a species.")
+	return "\n".join(lines)
+
+func open_collection() -> void:
+	collection_dialog.dialog_text = collection_text()
+	collection_dialog.popup_centered(Vector2i(760, 480))
 
 func preview_sale() -> void:
 	var error: String = city.sale_error(selected_ray)
@@ -494,10 +529,7 @@ func refresh() -> void:
 	else:
 		var egg_name: String = str(Model.SPECIES[city.founder_egg["species"]]["name"])
 		egg_info.text = "%s · %ds to hatch" % [egg_name, city.founder_remaining()] if city.founder_remaining() > 0 else "%s ready! Select compatible housing." % egg_name
-	var entries: PackedStringArray = []
-	for id in Model.SPECIES:
-		entries.append(str(Model.SPECIES[id]["name"]) + (" ✓" if city.discoveries.has(id) else " · " + str(Model.SPECIES[id]["source"])))
-	collection_info.text = "Collection %d/6  |  %s" % [city.discoveries.size(), "  |  ".join(entries)]
+	collection_info.text = "Collection %d/%d discovered · %d owned · inspect species and sources" % [city.discoveries.size(), Model.SPECIES.size(), city.individuals.size()]
 	var marked: bool = bool(ray.get("favorite", false))
 	favorite_button.text = "Unmark favorite" if marked else "Mark favorite"
 	var sale_error: String = city.sale_error(selected_ray)
@@ -703,6 +735,11 @@ func capture_fixture(directory: String) -> void:
 	if get_viewport().get_texture().get_image().save_png(directory + "/01-opening.png") != OK:
 		get_tree().quit(1)
 		return
+	var opening_book: String = collection_text()
+	if not opening_book.contains("1 of 6 species discovered · 1 rays owned") or not opening_book.contains("Undiscovered · Owned: 0 · Tide × Light · breeding not yet available"):
+		push_error("Opening collection projection incorrect")
+		get_tree().quit(1)
+		return
 	await click_fixture(sample_button)
 	await click_fixture(plant_short)
 	await click_fixture(feed_button)
@@ -875,4 +912,19 @@ func capture_fixture(directory: String) -> void:
 		get_tree().quit(1)
 		return
 	print("CITY_LEVEL_GUI_PASS: visible remaining-pip quote and native level-up action")
+	var book_revision: int = city.revision
+	var book_gold: int = city.gold
+	var book_food: int = city.food
+	await click_fixture(collection_button)
+	var book: String = collection_dialog.dialog_text
+	if not collection_dialog.visible or not book.contains("2 of 6 species discovered · 2 rays owned") or not book.contains("Sunbeam · Common · Light") or not book.contains("Discovered · Owned: 1 · Founder shop") or not book.contains("Mossdrop · Common · Bloom") or not book.contains("account Lv 4") or not book.contains("Rosefin · Rare · Bloom/Light") or city.revision != book_revision or city.gold != book_gold or city.food != book_food:
+		push_error("Collection Book GUI fixture missing records or changed city state")
+		get_tree().quit(1)
+		return
+	await RenderingServer.frame_post_draw
+	if get_viewport().get_texture().get_image().save_png(directory + "/08-collection-book.png") != OK:
+		get_tree().quit(1)
+		return
+	collection_dialog.hide()
+	print("CITY_COLLECTION_GUI_PASS: native Collection Book open, six catalog records, discovered/owned distinctions, source hints and no wallet mutation")
 	get_tree().quit(0)

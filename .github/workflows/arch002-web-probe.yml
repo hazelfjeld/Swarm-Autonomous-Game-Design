@@ -713,6 +713,58 @@ jobs:
                       "actual_site_verified": False}
                   (evidence / "crash-observation.json").write_text(json.dumps(crash_report, indent=2))
                   print(json.dumps(crash_report), flush=True)
+                  # Exercise a real synchronous transaction() refusal, without
+                  # closing the engine's own connection or corrupting its data.
+                  refusal = api("POST", session + "/execute/async", {"args": [], "script": """
+                    const done = arguments[arguments.length - 1];
+                    (async () => {
+                      if (!(await indexedDB.databases()).some(info => info.name === 'FILE_DATA'))
+                        throw new Error('Expected existing probe IDBFS database');
+                      const db = await new Promise((resolve, reject) => {
+                        const r = indexedDB.open('FILE_DATA');
+                        r.onsuccess = () => resolve(r.result);
+                        r.onerror = () => reject(r.error);
+                      });
+                      if (!db.objectStoreNames.contains('FILE_DATA')) {
+                        db.close();
+                        throw new Error('Expected probe object store');
+                      }
+                      db.close();
+                      const attempt = mode => {
+                        try { db.transaction('FILE_DATA', mode); return 'unexpected success'; }
+                        catch (e) { return e.name; }
+                      };
+                      const readonly = attempt('readonly');
+                      const writerAfterReadonly = window.littleRayProbeWriter;
+                      const write = attempt('readwrite');
+                      const warning = document.getElementById('storage-warning');
+                      return {readonly, writerAfterReadonly, write,
+                              writer: window.littleRayProbeWriter,
+                              state: document.body.dataset.storageState,
+                              visible: !warning.hidden && warning.getBoundingClientRect().height > 0,
+                              message: warning.textContent};
+                    })().then(done, e => done({browser_error: String(e)}));
+                  """})
+                  assert refusal.get("readonly") == "InvalidStateError", refusal
+                  assert refusal["writerAfterReadonly"] is True, refusal
+                  assert refusal["write"] == "InvalidStateError", refusal
+                  assert refusal["writer"] is False and refusal["state"] == "failed", refusal
+                  assert refusal["visible"] and "Displayed progress may include unsaved changes" in refusal["message"], refusal
+                  greet()
+                  time.sleep(2)
+                  assert saved() == ninth and saved("delivery_probe.json.previous") == eighth
+                  screenshot("15-indexeddb-sync-refusal")
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "reload after synchronous storage refusal")
+                  assert saved() == ninth and saved("delivery_probe.json.previous") == eighth
+                  assert script("return window.littleRayProbeWriter === true && document.getElementById('storage-warning').hidden")
+                  refusal_report = {"browser_sync_storage_refusal": "pass",
+                      "source_commit": manifest["source_commit"], "observation": refusal,
+                      "before_and_after": ninth, "previous_good": eighth,
+                      "method": "real closed independent IDBFS database connection; not engine connection",
+                      "actual_site_verified": False}
+                  (evidence / "storage-refusal-observation.json").write_text(json.dumps(refusal_report, indent=2))
+                  print(json.dumps(refusal_report), flush=True)
                   print(json.dumps({"browser_smoke": "pass", "source_commit": manifest["source_commit"],
                       "browser": opened["capabilities"].get("browserVersion"),
                       "observations": ["loader completion", "mouse greeting", "IndexedDB persistence",

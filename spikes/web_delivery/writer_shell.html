@@ -43,15 +43,26 @@
       window.littleRayProbeWriter = false;
       document.body.dataset.storageState = "failed";
       const warning = document.getElementById("storage-warning");
-      warning.textContent = "Save unavailable: browser storage write failed. Recent changes may be lost. Copy a backup if needed; reload to recover.";
+      warning.textContent = "Save unavailable: browser storage write failed. Displayed progress may include unsaved changes. Copy a backup if needed; reload to recover.";
       warning.hidden = false;
     }
 
     function observeStorageWrites() {
       const transaction = IDBDatabase.prototype.transaction;
       IDBDatabase.prototype.transaction = function(...args) {
-        const tx = Reflect.apply(transaction, this, args);
-        if (tx.mode === "readwrite" && tx.objectStoreNames.contains("FILE_DATA")) {
+        // Match the probe's IDBFS store before creating the transaction:
+        // transaction() itself can throw synchronously (e.g. closed database).
+        const stores = typeof args[0] === "string" ? [args[0]] : args[0];
+        const probeWrite = this.name === "FILE_DATA" && args[1] === "readwrite" &&
+          Array.isArray(stores) && stores.includes("FILE_DATA");
+        let tx;
+        try {
+          tx = Reflect.apply(transaction, this, args);
+        } catch (error) {
+          if (probeWrite) storageFailed();
+          throw error;
+        }
+        if (this.name === "FILE_DATA" && tx.mode === "readwrite" && tx.objectStoreNames.contains("FILE_DATA")) {
           tx.addEventListener("abort", storageFailed, {once: true});
         }
         return tx;

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "art-audio",
-  "run_id": "art-audio-20261125T0927Z-master-motion-41c7",
+  "run_id": null,
   "generation": 38,
-  "acquired_at": "2026-11-25T09:28:21.247Z",
-  "expires_at": "2026-11-25T09:58:21.247Z"
+  "acquired_at": null,
+  "expires_at": null
 }

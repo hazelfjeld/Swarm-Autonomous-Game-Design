@@ -34,6 +34,7 @@ var shop_choice: OptionButton
 var buy_button: Button
 var place_egg_button: Button
 var move_ray_button: Button
+var upgrade_button: Button
 var egg_info: Label
 var collection_info: Label
 var selected_ray: String = "ray-1"
@@ -110,7 +111,9 @@ func _ready() -> void:
 	move_ray_button = button_at("Move selected ray here", Vector2(600, 685), func(): act("move_ray", selected_ray + "," + selected_habitat))
 	move_ray_button.size = Vector2(235, 44)
 	move_ray_button.add_theme_font_size_override("font_size", 15)
-	label_at("Selected habitat → collect / place / move", Vector2(843, 686), Vector2(220, 44), 14).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	upgrade_button = button_at("Upgrade selected habitat", Vector2(843, 685), func(): act("upgrade_habitat", selected_habitat))
+	upgrade_button.size = Vector2(225, 44)
+	upgrade_button.add_theme_font_size_override("font_size", 13)
 	shop_choice = option_at(Vector2(30, 737), Vector2(275, 44))
 	for species_id in ["sunbeam", "blueberry", "mossdrop"]:
 		shop_choice.add_item("%s egg · 100 G · Lv %d" % [Model.SPECIES[species_id]["name"], Model.FOUNDER_GATES[species_id]])
@@ -266,7 +269,14 @@ func refresh() -> void:
 	ray_info.text = "Lv %d · %d/4 pips · %s\nHP %d · POW %d · SPD %d · %.2f G/min" % [ray["level"], ray["pips"], "/".join(PackedStringArray(species["elements"])), stats["health"], stats["power"], stats["speed"], city.ray_rate_ticks(selected_ray) / 4.0]
 	sample_button.disabled = city.sample_claimed
 	collect_button.disabled = city.stored_gold(selected_habitat) == 0
-	collect_button.text = "Collect %d Gold (selected home)" % city.stored_gold(selected_habitat)
+	collect_button.text = "Collect %d / %d Gold" % [city.stored_gold(selected_habitat), city.habitat_gold_cap(selected_habitat)]
+	upgrade_button.disabled = not city.construction.is_empty() or city.habitat_capacity(selected_habitat) == Model.LARGE_CAPACITY or city.gold < Model.LARGE_COST or city.account_level() < Model.LARGE_GATE
+	if city.upgrading(selected_habitat):
+		upgrade_button.text = "Upgrading · %ds left" % city.construction_remaining()
+	elif city.habitat_capacity(selected_habitat) == Model.LARGE_CAPACITY:
+		upgrade_button.text = "Large · 4 rays / 5000 G"
+	else:
+		upgrade_button.text = "Large · 600 G · 5m\nLv 5 · income pauses"
 	var cost: int = city.feed_cost(selected_ray)
 	feed_button.disabled = cost == 0 or city.food < cost
 	feed_button.text = "Feed · %d Food" % cost if cost > 0 else "Level cap reached"
@@ -284,6 +294,7 @@ func refresh() -> void:
 	collection_info.text = "Collection %d/6  |  %s" % [city.discoveries.size(), "  |  ".join(entries)]
 	refresh_choices()
 	cancel_build_button.disabled = city.construction.is_empty()
+	cancel_build_button.text = "Cancel upgrade" if city.construction.get("kind", "build") == "upgrade" else "Cancel build"
 	var job: Dictionary = city.farm_crop(selected_farm)
 	var empty: bool = job.is_empty()
 	plant_short.disabled = not empty or city.gold < 20
@@ -348,15 +359,17 @@ func draw_building(b: Dictionary) -> void:
 			var residents: Array[String] = city.resident_ids(id)
 			for i in range(residents.size()):
 				var resident: Dictionary = city.individuals[residents[i]]
-				var offset: float = 0.0 if residents.size() == 1 else -20.0 + i * 40.0
-				draw_placeholder_ray(center + Vector2(offset,-7), str(resident["species"]), 1.0 if residents.size() == 1 else 0.62)
+				var offset: Vector2 = Vector2.ZERO if residents.size() == 1 else (Vector2(-20.0 + i * 40.0, 0) if residents.size() == 2 else Vector2(-20.0 + (i % 2) * 40.0, -13.0 + floori(i / 2.0) * 25.0))
+				draw_placeholder_ray(center + offset + Vector2(0,-7), str(resident["species"]), 1.0 if residents.size() == 1 else 0.62)
 			if residents.is_empty():
 				ink("Empty · 0 G/min", center + Vector2(-55,7), 14)
-			ink("%d/2 · %d G" % [residents.size(), city.stored_gold(id)], center + Vector2(-44,58), 15)
+			ink("%d/%d · %d G" % [residents.size(), city.habitat_capacity(id), city.stored_gold(id)], center + Vector2(-44,58), 15)
+			if city.upgrading(id):
+				ink("Paused · %ds" % city.construction_remaining(), center + Vector2(-42,35), 14)
 			if city.stored_gold(id) > 0:
 				draw_circle(center + Vector2(41,-33), 14, Color("#ffce63"))
 				ink("G", center + Vector2(35,-28), 14, Color("#533e26"))
-			ink(str(b["kind"]), center + Vector2(-53,-47), 16)
+			ink(("Large " if city.habitat_capacity(id) == Model.LARGE_CAPACITY else "") + str(b["kind"]), center + Vector2(-65,-47), 15)
 		"hatchery":
 			tile(x,y,footprint,footprint,Color("#e5c58d"))
 			draw_circle(center, 27, Color("#b89d72"))

@@ -5,6 +5,11 @@ extends RefCounted
 const TICKS_PER_GOLD = 240
 const SMALL_CAP = 500
 const SMALL_CAPACITY = 2
+const LARGE_CAPACITY = 4
+const LARGE_CAP = 5000
+const LARGE_COST = 600
+const LARGE_DURATION_MS = 300000
+const LARGE_GATE = 5
 # GDD v2 §§5–7,9: ordered elements and source-defined stat profiles.
 const SPECIES = {
 	"blueberry": {"name": "Blueberry", "elements": ["Tide"], "rarity": "Common", "role": "Attacker", "source": "Founder shop"},
@@ -88,21 +93,48 @@ var receipts: Dictionary = {}
 func advance(delta_ms: int) -> void:
 	if delta_ms <= 0:
 		return
-	elapsed_ms += delta_ms
-	# Per-bin fixed-point production; fractions remain in the original bin.
+	var target_ms: int = elapsed_ms + delta_ms
+	# Settle each side of the builder deadline separately. Upgrades pause only
+	# the selected habitat, retain its bin, then resume at its new capacity.
+	if not construction.is_empty() and int(construction["deadline_ms"]) <= target_ms:
+		var deadline: int = maxi(elapsed_ms, int(construction["deadline_ms"]))
+		_produce(deadline - elapsed_ms)
+		elapsed_ms = deadline
+		_finish_construction()
+	_produce(target_ms - elapsed_ms)
+	elapsed_ms = target_ms
+
+func _produce(delta_ms: int) -> void:
+	if delta_ms <= 0:
+		return
 	for habitat_id in habitat_ids():
 		var bin: Dictionary = habitat_bins[habitat_id]
+		var cap_ticks: int = habitat_gold_cap(habitat_id) * TICKS_PER_GOLD
 		var total: int = int(bin["subticks"]) + delta_ms * habitat_rate_ticks(habitat_id)
-		bin["ticks"] = mini(SMALL_CAP * TICKS_PER_GOLD, int(bin["ticks"]) + floori(total / 1000.0))
-		bin["subticks"] = 0 if int(bin["ticks"]) == SMALL_CAP * TICKS_PER_GOLD else total % 1000
-	if not construction.is_empty() and elapsed_ms >= int(construction["deadline_ms"]):
-		var built: Dictionary = find_building(str(construction["building_id"]))
+		bin["ticks"] = mini(cap_ticks, int(bin["ticks"]) + floori(total / 1000.0))
+		bin["subticks"] = 0 if int(bin["ticks"]) == cap_ticks else total % 1000
+
+func _finish_construction() -> void:
+	var built: Dictionary = find_building(str(construction["building_id"]))
+	if construction.get("kind", "build") == "upgrade":
+		built["tier"] = 2
+		xp += 25
+	else:
 		if HABITAT_ELEMENTS.has(built["type"]):
 			habitat_bins[built["id"]] = {"ticks": 0, "subticks": 0}
 		xp += 50
-		construction = {}
-		_settle_trained_founders()
-		revision += 1
+	construction = {}
+	_settle_trained_founders()
+	revision += 1
+
+func habitat_capacity(habitat_id: String) -> int:
+	return LARGE_CAPACITY if int(find_building(habitat_id).get("tier", 1)) == 2 else SMALL_CAPACITY
+
+func habitat_gold_cap(habitat_id: String) -> int:
+	return LARGE_CAP if int(find_building(habitat_id).get("tier", 1)) == 2 else SMALL_CAP
+
+func upgrading(id: String) -> bool:
+	return not construction.is_empty() and construction["building_id"] == id and construction.get("kind", "build") == "upgrade"
 
 func habitat_ids() -> Array[String]:
 	var ids: Array[String] = []
@@ -128,6 +160,8 @@ func ray_rate_ticks(ray_id: String) -> int:
 	return int(RARITIES[ray_species(ray_id)["rarity"]]["gold"]) * (int(ray["level"]) + 3)
 
 func habitat_rate_ticks(habitat_id: String) -> int:
+	if upgrading(habitat_id):
+		return 0
 	var rate: int = 0
 	for id in resident_ids(habitat_id):
 		rate += ray_rate_ticks(id)
@@ -166,8 +200,9 @@ func housing_error(species_id: String, habitat_id: String) -> String:
 	var building: Dictionary = find_building(habitat_id)
 	if not SPECIES[species_id]["elements"].has(HABITAT_ELEMENTS[building["type"]]):
 		return "Element mismatch: %s needs %s." % [SPECIES[species_id]["name"], " or ".join(PackedStringArray(SPECIES[species_id]["elements"]))]
-	if resident_ids(habitat_id).size() >= SMALL_CAPACITY:
-		return "Habitat full (2/2). Build another compatible habitat or move a resident."
+	var capacity: int = habitat_capacity(habitat_id)
+	if resident_ids(habitat_id).size() >= capacity:
+		return "Habitat full (%d/%d). Upgrade, build another compatible habitat or move a resident." % [capacity, capacity]
 	return ""
 
 func founder_remaining() -> int:
@@ -217,7 +252,7 @@ func find_building(id: String) -> Dictionary:
 	return {}
 
 func pending(id: String) -> bool:
-	return not construction.is_empty() and construction["building_id"] == id
+	return not construction.is_empty() and construction["building_id"] == id and not upgrading(id)
 
 func construction_remaining() -> int:
 	if construction.is_empty():
@@ -395,6 +430,20 @@ func command(kind: String, argument: String, op_id: String, expected_revision: i
 			buildings.append({"id": id, "type": parts[0], "kind": spec["kind"], "x": x, "y": y, "size": spec["size"]})
 			construction = {"building_id": id, "deadline_ms": elapsed_ms + int(spec["seconds"]) * 1000, "cost": spec["gold"]}
 			message = "−%d Gold · Building %s (%ds)" % [spec["gold"], spec["kind"], spec["seconds"]]
+		"upgrade_habitat":
+			if not habitat_ids().has(argument):
+				return {"ok": false, "message": "Choose a completed elemental habitat."}
+			if not construction.is_empty():
+				return {"ok": false, "message": "Builder busy; wait or cancel."}
+			if habitat_capacity(argument) != SMALL_CAPACITY:
+				return {"ok": false, "message": "Large is the maximum tier in this slice."}
+			if account_level() < LARGE_GATE:
+				return {"ok": false, "message": "Large habitat unlocks at account level 5."}
+			if gold < LARGE_COST:
+				return {"ok": false, "message": "Large habitat costs 600 Gold."}
+			gold -= LARGE_COST
+			construction = {"kind": "upgrade", "building_id": argument, "deadline_ms": elapsed_ms + LARGE_DURATION_MS, "cost": LARGE_COST}
+			message = "−600 Gold · Large upgrade (5m); income paused, collection available."
 		"move":
 			var parts: PackedStringArray = argument.split(",")
 			if parts.size() != 3 or not parts[1].is_valid_int() or not parts[2].is_valid_int():
@@ -414,10 +463,11 @@ func command(kind: String, argument: String, op_id: String, expected_revision: i
 				return {"ok": false, "message": "No construction to cancel."}
 			var building: Dictionary = find_building(str(construction["building_id"]))
 			var refund: int = floori(int(construction["cost"]) * 0.8)
-			buildings.erase(building)
+			if construction.get("kind", "build") != "upgrade":
+				buildings.erase(building)
 			gold += refund
 			construction = {}
-			message = "Construction canceled · +%d Gold refund" % refund
+			message = "Builder job canceled · +%d Gold refund" % refund
 		"feed":
 			var ray_id: String = "ray-1" if argument.is_empty() else argument
 			var cost: int = feed_cost(ray_id)

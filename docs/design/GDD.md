@@ -2,9 +2,11 @@
 
 Game Design Document
 
-Version 2.0 · 23 November 2026
+Version 2.1 · 25 November 2026
 
 ## 1 Product direction and authority
+
+**Creative identity and reference fidelity (DIRECTOR-003):** The [canonical creative-direction charter](CREATIVE_DIRECTION.md) specifies the classic Dragon City / DragonVale / Monster Legends-era isometric collector feel, MouseHunt-like originality of collectible themes and consistently cute manta-ray anatomy across the entire cast. It governs visual decisions and gameplay presentation, while the explicit numeric, mechanical, technical and milestone contracts below remain unchanged from v2.0. The exact pixel-versus-cartoon production treatment is **not selected** by this revision; ART-002 and Hazel's eventual taste choice remain prerequisites before roster-scale art.
 
 **Little Ray is a Dragon City and Monster Legends style creature collection RPG in which the player builds an expanding island city, breeds cute elemental manta rays, grows food, develops increasingly powerful creatures, and fights with a team of three.** The city is an economic machine as well as a place to show the collection. New species, higher rarities, stronger teams, larger habitats, additional islands and league progression give the player continuing goals.
 
@@ -136,6 +138,8 @@ A completed hatch waits in its hatchery slot until there is compatible space. It
 Do not permit an economy dead end: the player's last owned ray cannot be sold or extracted, a habitat containing a ray cannot be removed, and moving buildings is free. A valid resident therefore keeps producing Gold without requiring more Food. Later a storage Vault may provide non-productive reserve slots as an earned building; it is not needed to complete the slice and cannot be silently treated as a free starting inventory.
 
 ## 5 Ray collection and rarity
+
+**Unified family rule:** Every listed species must still read as a lovable baby-manta variant at normal habitat, portrait and battle scales. A different rarity, element, theme, animation or growth stage must not turn its body into an unrelated animal/dragon or create a competing art style. Follow [CREATIVE_DIRECTION.md](CREATIVE_DIRECTION.md) for the shared snoot/eyes/wings/underside/tail anatomy and for how to vary markings, motifs and modest accessories without losing identity. The twenty-four species listed here are the existing v2.0 content targets, not twenty-four newly approved visual concepts.
 
 Each species has a fixed content ID, one or two ordered elements, rarity, base stat profile, Gold rate, learnable skill set, breeding routes and presentation data. Each owned individual has its own ID, nickname, level/feed progress, rank, equipped skills/runes, parent references, acquisition receipt and current habitat. Renaming never changes identity. Keep the existing species keys for the eight original names.
 
@@ -545,6 +549,8 @@ Support readable text scaling, reduced motion, volume settings and paused turn s
 
 ### Mascot and city identity
 
+**Classic social-game art grammar:** Little Ray's buildings, multiple inhabited habitats, collection bubbles, planting/harvest states, visible eggs, queues, sector locks, selection panels and full six-actor battle should give a player familiar with 2010s creature collectors an immediately recognizable activity structure. Do not reinterpret the game as an empty reef sanctuary, completely abstract grid, unrelated fantasy roster or heavily experimental interface. Create an original island composition, original panels, characters and assets rather than copying trademarked artwork, screenshots or proprietary layouts. The charter in [CREATIVE_DIRECTION.md](CREATIVE_DIRECTION.md) is a normative design-quality companion; concrete production-style choice remains pending the existing Blueberry trial.
+
 The cast remains cute manta rays: a soft protruding snoot, one large friendly near eye in side view, broad floppy wings, a pale underside and a long tapering tail. Distinguish species through silhouette accents, large readable motifs, color blocks and elemental effects. Rarer rays should be more elaborate and desirable while still belonging to the same recognizable manta family. Avoid converting higher tiers into unrelated dragons, humanoids or realistic predatory adults.
 
 Use the established Blueberry/Sunbeam/Pearlcloud concept cover as reference for creature identity, not as a specification for a low-density sanctuary-only game. The city must look like a creature-collection management game: multiple productive habitats, growing crops, eggs in visible slots, a conspicuous breeding building, Gold collection bubbles, construction and locked expansion land. Representative screenshots need to communicate those functions immediately.
@@ -639,6 +645,8 @@ If the content budget is too high, reduce the initial number of species, islands
 
 ### Minimum faithful playable outcome
 
+**Additional fidelity gate:** This slice must *look and behave like* a classic colorful isometric city/creature collector populated by one consistent manta family, not merely implement its numerical backend. Gate A is the existing ART-002 Blueberry pixel-vs-cartoon review and Hazel's style choice; Gate B is ART-003's six-species same-scale lineup and resident/portrait/3v3 readability against that chosen style; Gate C is the real player-controlled city-to-hatch-to-battle-to-expansion loop inspected in the actual intended runtime. Detailed proof and exclusions are in [CREATIVE_DIRECTION.md](CREATIVE_DIRECTION.md). These additional quality observations do not automatically unblock existing dependencies or replace the original mechanics, build, save and human-playtest requirements.
+
 A new player builds the early city, collects ray-generated Gold, plants and harvests crops, feeds two founders to breeding level, starts a breeding job, transfers its egg to a distinct hatchery, places and trains Pearlcloud, assembles three rays, wins an actual three-versus-three adventure encounter and buys the first land expansion. The same profile then supports ordinary uncertain breeding toward Kelpskip and Rosefin, with Mossdrop as the third founder.
 
 The slice includes six collectible species, three player housing elements, Common/Uncommon/Rare, four initially owned sectors and one purchased sector, two farms with the one/five-minute crops, ordinary Small/Large habitats, one grotto and one hatchery slot with the Gold-funded second-slot upgrade. Account/feeding caps through level 10 and the three authored encounters are enough to prove the opening. A full 24-species implementation, Lab/runes, network accounts and real PvP are later stages.
@@ -669,6 +677,8 @@ The user must be able to operate the loop through game controls on the declared 
 Keep one exact candidate identity across the game files, content manifest, screenshots and test report. Independent QA reports defects and unresolved human evidence; architect integrates the reviewed revision. A corrected GDD is design work, not evidence that any of these game features are already implemented.
 
 ## 18 Validation and acceptance evidence
+
+**Creative-consistency evidence required alongside technical tests:** Evaluate same-scale Blueberry, Sunbeam, Mossdrop, Pearlcloud, Kelpskip and Rosefin as one recognizable manta family, plus an actual-scale productive island view and readable six-actor battle view. Record shared anatomy, species distinction, populated habitat legibility, functional building/HUD affordances and original-asset provenance. A static concept image or HTML mockup is *design evidence*, not a verified game screenshot. The selected pixel/cartoon treatment and final creative approval must be explicitly attributed to Hazel; no AI grading score substitutes for her outstanding choice. Existing technical and gameplay proof remains independently required.
 
 ### Checks of this design
 
@@ -737,6 +747,10 @@ Preserve the cute manta identity, names and stable species keys, individual owne
 Update the design baseline, first-slice map, source metadata and GDD pointer together. Rewrite affected existing feature issue criteria with a visible v2 revision note and link to DIRECTOR-002. Add the separated breeding and integration tasks. Do not close historical DIRECTOR-001 as a failure, reopen its intake, delete prior review evidence or duplicate startup automation registrations.
 
 The actual experiment phase and task readiness must follow current live evidence. Compatible architecture and art trials may continue while v2 is reviewed; v1-dependent city/breeding/battle acceptance waits for the revised scope. A phase transition already reviewed by another role must be reconciled rather than overwritten with an old checkout. The current GDD version remains `received` until there is explicit approval of that exact version; the user's direction correction already authorizes this revision work.
+
+### v2.1 creative fidelity clarification — DIRECTOR-003
+
+Hazel clarified and explicitly approved preserving the familiar classic social creature-collector experience while replacing every creature with a cohesive family of cute fantasy manta rays. MouseHunt informs collectible imagination and charm, not a new mouse-catching/gameplay formula. The charter, GDD introductory identity, collection-art constraints, presentation checks and first-slice evidence requirements are tightened. **No v2.0 economy, rarity multiplier, breeding probability, timer, combat rule, map size, content quantity, platform selection, or role schedule was altered.** Archived v1.0/v2.0 sources and in-flight branches/PRs remain intact. The six-ray production style awaits ART-002 review and Hazel's choice; this document does not claim that choice or a completed game.
 
 ## 20 Sources and design provenance
 

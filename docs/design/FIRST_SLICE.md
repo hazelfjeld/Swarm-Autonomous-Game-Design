@@ -1,10 +1,16 @@
 # Little Ray first playable slice
 
-Current source: [GDD v2.0](GDD.md). Owner: director. Revision: [DIRECTOR-002 #22](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/22). Milestone: [M0 #8](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/8). This replaces the v1 sanctuary/Practice Pool acceptance scope.
+Current source: [GDD v2.1](GDD.md), plus [the creative-direction charter](CREATIVE_DIRECTION.md). Owner: director. Revision: [DIRECTOR-002 #22](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/22). Milestone: [M0 #8](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/8). This replaces the v1 sanctuary/Practice Pool acceptance scope.
 
 ## Player visible outcome
 
 A fresh player collects Gold from Blueberry's habitat, buys/hatches Sunbeam, builds appropriate housing, grows paid crops, feeds the parents to level four, breeds a saved Pearlcloud egg, transfers it into a separate hatchery, places and trains the hatchling, wins a three-versus-three adventure battle and purchases land. The next visible collection goals are Mossdrop, Kelpskip and Rosefin, using ordinary random pools and duplicate outcomes. Reload preserves the city, individuals, jobs and settled rewards.
+
+## Classic collector fidelity and unified ray art
+
+The required gameplay loop is unchanged. Presentation must feel like a classic colorful isometric social creature collector, with active habitat residents, income bubbles, farms, breeding grotto, distinct hatchery slots, visible timers, shop/collection/HUD paths, six readable battle actors and unlockable land—not an abstract grid or mostly empty sanctuary.
+
+Before roster-scale art, **ART-002 #10** retains its one-Blueberry, two-treatment comparison at matched actual display scale, independent QA and Hazel's final rendering choice. **ART-003 #11** then supplies the original six-ray same-scale lineup and city/portrait/battle contexts. Every ray uses one baby-manta anatomy/art family. **GAMEPLAY-005 #24** incorporates those accepted assets through ordinary game controls; **QA-002 #14** evaluates genre/readability and runtime evidence separately. The [charter](CREATIVE_DIRECTION.md) defines five anatomy markers, the visual acceptance gates, original-asset restrictions and evidence labels. No approved new costs, formulas, species count or schedule change is implied.
 
 ## Scope boundary
 
@@ -44,6 +50,9 @@ The director sets readiness from actual dependency evidence. Review/integration 
 | Progression result | First-clear/repeat/star rewards and entry costs settle once. The player buys the first sector and sees another collection or city goal. |
 | Return and recovery | Normal reload, long absence, upgrade completion, twelve-hour timer fixture, corrupt import, duplicate commands and second tab retain valid ownership/state. |
 | Actual presentation | The city conveys farms/habitats/eggs/expansion and the battle shows all actors. Required controls work in declared mouse/keyboard/touch contexts with visible audio equivalents. |
+| Classic collector identity | Actual-scale productive island screen demonstrates dense colorful isometric habitats, Gold bubbles, crop/hatch/breed states, menu affordances and expansion; not a sparse sanctuary. |
+| One manta art family | Six original collectible rays at the same size/camera angle retain the five Blueberry anatomy anchors and remain distinct through coherent, readable color/motif differences; review small habitat and six-actor battle contexts. |
+| Source and taste truth | External game/Fish World images remain reference-only; new art is original/provenanced, creative treatment remains pending Hazel's explicit visual choice, and concept/mockup/tested runtime/human observations are labeled separately. |
 | Human understanding | Record what a real player understands about the next target, two queues, duplicate choice and combat. Model simulations do not supply this evidence. |
 
 Use injected RNG and accelerated clocks only for explicitly labeled deterministic tests. Also observe the ordinary real-time tutorial. The intended first team is Blueberry, Sunbeam and Pearlcloud at level four; a just-hatched level-one Pearlcloud is not the same fixture.

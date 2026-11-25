@@ -5,15 +5,35 @@
   "gdd": {
     "status": "received",
     "path": "docs/design/GDD.md",
-    "source_path": "docs/design/source/Little_Ray_GDD_v2.0.docx",
-    "version": "2.0"
+    "source_path": "docs/design/source/Little_Ray_GDD_v2.1.docx",
+    "version": "2.1"
   },
   "roles": {
-    "director": {"path": "roles/director.md", "prompt_path": "prompts/director.md", "schedule_minute": 0},
-    "architect": {"path": "roles/architect.md", "prompt_path": "prompts/architect.md", "schedule_minute": 10},
-    "gameplay": {"path": "roles/gameplay.md", "prompt_path": "prompts/gameplay.md", "schedule_minute": 20},
-    "art-audio": {"path": "roles/art-audio.md", "prompt_path": "prompts/art-audio.md", "schedule_minute": 30},
-    "qa": {"path": "roles/qa.md", "prompt_path": "prompts/qa.md", "schedule_minute": 40}
+    "director": {
+      "path": "roles/director.md",
+      "prompt_path": "prompts/director.md",
+      "schedule_minute": 0
+    },
+    "architect": {
+      "path": "roles/architect.md",
+      "prompt_path": "prompts/architect.md",
+      "schedule_minute": 10
+    },
+    "gameplay": {
+      "path": "roles/gameplay.md",
+      "prompt_path": "prompts/gameplay.md",
+      "schedule_minute": 20
+    },
+    "art-audio": {
+      "path": "roles/art-audio.md",
+      "prompt_path": "prompts/art-audio.md",
+      "schedule_minute": 30
+    },
+    "qa": {
+      "path": "roles/qa.md",
+      "prompt_path": "prompts/qa.md",
+      "schedule_minute": 40
+    }
   },
   "automation": {
     "timezone": "America/Chicago",
@@ -33,9 +53,20 @@
   "board": {
     "message_board_issue": 1,
     "decision_log_issue": 2,
-    "role_issue_numbers": {"director": 3, "architect": 4, "gameplay": 5, "art-audio": 6, "qa": 7}
+    "role_issue_numbers": {
+      "director": 3,
+      "architect": 4,
+      "gameplay": 5,
+      "art-audio": 6,
+      "qa": 7
+    }
   },
   "milestones": [
-    {"id": "M0", "issue_number": 8, "title": "First GDD-derived design-build-review cycle", "status": "awaiting_capability_checks"}
+    {
+      "id": "M0",
+      "issue_number": 8,
+      "title": "First GDD-derived design-build-review cycle",
+      "status": "awaiting_capability_checks"
+    }
   ]
 }

@@ -68,9 +68,10 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/city-evidence"
           command -v xvfb-run
-          timeout 60 xvfb-run -a "$RUNNER_TEMP/Godot_v4.7.2-stable_linux.x86_64" --path game/city_checkpoint --audio-driver Dummy -- --capture-city "$RUNNER_TEMP/city-evidence"
+          timeout 130 xvfb-run -a "$RUNNER_TEMP/Godot_v4.7.2-stable_linux.x86_64" --path game/city_checkpoint --audio-driver Dummy -- --capture-city "$RUNNER_TEMP/city-evidence"
           test -s "$RUNNER_TEMP/city-evidence/01-opening.png"
           test -s "$RUNNER_TEMP/city-evidence/02-after-input.png"
+          test -s "$RUNNER_TEMP/city-evidence/03-earned-and-harvested.png"
           git rev-parse HEAD > "$RUNNER_TEMP/city-evidence/source-commit.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()

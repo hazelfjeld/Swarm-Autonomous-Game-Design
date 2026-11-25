@@ -9,7 +9,7 @@ Use the architect's verified Godot 4.7.2 stable editor. Open this directory as a
     godot --path game/city_checkpoint
     godot --headless --path game/city_checkpoint --script res://tests.gd
 
-Name Blueberry in the text field (Enter), collect the one-time tutorial sample or wait 30 seconds for the first earned Gold, plant Sprout Kelp or Ribbon Kelp, wait its real 60/300 seconds, harvest, and feed in four pips per level. No time shortcuts are exposed to normal play. The CI native GUI fixture uses simulated mouse events; domain tests inject time explicitly. Screenshots and web export are retained on the exact-head CI run when successful.
+Name Blueberry in the text field (Enter), collect the one-time tutorial sample or wait 30 seconds for the first earned Gold, plant Sprout Kelp or Ribbon Kelp, wait its real 60/300 seconds, harvest, and feed in four pips per level. No time shortcuts are exposed to normal play. The CI native GUI fixture uses simulated native mouse events and waits the real 60 seconds before collecting earned Gold and harvesting; domain tests inject time explicitly. Screenshots and web export are retained on the exact-head CI run when successful.
 
 ## Boundary
 

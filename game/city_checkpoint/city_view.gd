@@ -192,5 +192,17 @@ func capture_fixture(directory: String) -> void:
 	if get_viewport().get_texture().get_image().save_png(directory + "/02-after-input.png") != OK:
 		get_tree().quit(1)
 		return
-	print("CITY_GUI_INPUT_PASS: sample, paid planting, feed via native mouse events")
+	# Wait for the real 60-second crop on the normal clock, not a debug grant.
+	await get_tree().create_timer(61.0).timeout
+	await click_fixture(collect_button)
+	await click_fixture(harvest_button)
+	if city.gold < 1192 or city.food != 275 or city.xp != 105 or not city.crop.is_empty() or city.pips != 1:
+		push_error("GUI real-time harvest fixture failed: " + str(city.snapshot()))
+		get_tree().quit(1)
+		return
+	await RenderingServer.frame_post_draw
+	if get_viewport().get_texture().get_image().save_png(directory + "/03-earned-and-harvested.png") != OK:
+		get_tree().quit(1)
+		return
+	print("CITY_GUI_INPUT_PASS: sample, paid planting, feed, real-time resident collect and crop harvest via native mouse events")
 	get_tree().quit(0)

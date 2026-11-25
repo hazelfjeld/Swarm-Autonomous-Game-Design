@@ -22,7 +22,7 @@ var level: int = 1
 var pips: int = 0
 var income_ticks: int = 0
 var elapsed_ms: int = 0
-var remainder_ms: int = 0
+var income_subticks: int = 0
 var sample_claimed: bool = false
 var nickname: String = "Blueberry"
 var crop: Dictionary = {}
@@ -32,11 +32,10 @@ func advance(delta_ms: int) -> void:
 	if delta_ms <= 0:
 		return
 	elapsed_ms += delta_ms
-	var total: int = remainder_ms + delta_ms
-	var seconds: int = floori(total / 1000.0)
-	remainder_ms = total % 1000
-	# Blueberry, Common: 2 * (level + 3) ticks per whole second.
-	income_ticks = mini(SMALL_CAP * TICKS_PER_GOLD, income_ticks + seconds * 2 * (level + 3))
+	# Fixed-point thousandths of a tick preserve production before a mid-second feed.
+	var total: int = income_subticks + delta_ms * 2 * (level + 3)
+	income_ticks = mini(SMALL_CAP * TICKS_PER_GOLD, income_ticks + floori(total / 1000.0))
+	income_subticks = 0 if income_ticks == SMALL_CAP * TICKS_PER_GOLD else total % 1000
 
 func stored_gold() -> int:
 	return floori(income_ticks / float(TICKS_PER_GOLD))
@@ -130,4 +129,4 @@ func snapshot() -> Dictionary:
 	return {"checkpoint_schema": 1, "revision": revision, "gold": gold, "food": food, "xp": xp,
 		"individual": {"id": "ray-1", "species": "blueberry", "elements": ["Tide"], "rarity": "Common", "nickname": nickname, "level": level, "pips": pips, "habitat_id": "tide-1"},
 		"buildings": BUILDINGS.duplicate(true), "income_ticks": income_ticks, "elapsed_ms": elapsed_ms,
-		"remainder_ms": remainder_ms, "sample_claimed": sample_claimed, "crop": crop.duplicate(true), "receipts": receipts.duplicate(true)}
+		"income_subticks": income_subticks, "sample_claimed": sample_claimed, "crop": crop.duplicate(true), "receipts": receipts.duplicate(true)}

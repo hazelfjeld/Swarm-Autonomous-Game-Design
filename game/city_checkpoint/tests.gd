@@ -56,6 +56,12 @@ func _initialize() -> void:
 	check(m.command("plant","ribbon","ribbon",m.revision).ok, "five-minute crop")
 	m.advance(300000)
 	check(m.command("harvest","","ribbon-harvest",m.revision).ok and m.food == 360 and m.xp == 120, "ribbon yields 180 Food and 15 XP")
+	var fractional = Model.new()
+	fractional.advance(500)
+	for n in range(4):
+		fractional.command("feed", "", "fractional-%d" % n, fractional.revision)
+	fractional.advance(500)
+	check(fractional.income_ticks == 9 and fractional.income_subticks == 0, "rate change midway through second preserves old and new contribution")
 	var a = Adapter.new()
 	a.capture(m.snapshot())
 	m.command("feed","","extra",m.revision)

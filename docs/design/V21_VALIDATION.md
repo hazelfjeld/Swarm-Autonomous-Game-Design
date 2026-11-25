@@ -8,7 +8,7 @@
 ## Files and provenance
 
 - [Complete GDD v2.1](GDD.md) — 102,269 UTF-8 bytes; SHA-256 `55d43ab2e48073ee555cf521981ea7ca9b9311fc7517d12989566ce75c884005`; Git blob `602197d618fa183789f1e3e7e0c2a8b3afc2ec03`.
-- [Full v2.1 Word companion](source/Little_Ray_GDD_v2.1.docx) — 394,283 bytes; SHA-256 `10a837a413d0bb171df8fd7fb66339279f091b16fcaeb2af427475b20b4a5638`; Git blob `d313d52c1b032cae4eb400a23555beaca6487219`.
+- [Full v2.1 Word companion](source/Little_Ray_GDD_v2.1.docx) — 394,751 bytes; SHA-256 `f2a8fd83d590e6e7a700b450166842ea64820233f459470e211b3944112812c5`; Git blob `1b007f190254c15f33ab38e2caac6a16ab1e2400`.
 - [Creative direction](CREATIVE_DIRECTION.md) — new normative presentation charter.
 - [SOURCE.md](SOURCE.md) — versioned source record; exact v2.0 Markdown archived separately, illustrated v2.0 Word and both original v1 artifacts untouched.
 
@@ -48,3 +48,8 @@ The DOCX is a text-first, complete reformat of the canonical Markdown. Its prede
 - Treat new presentation gates as effective after reviewed merge; preserve #10's Review and #11/#14/#24's Blocked statuses until their own evidence clears.
 - QA should record independent, qualified findings first; architect checks latest head and existing required CI/review before integrating.
 - **Director is not the merge owner. Do not merge this branch without the required reviews.**
+
+
+## Word link correction — 25 November 2026
+
+Independent QA on PR #28 identified four external relationships (rId5–rId8) targeting the wrong sibling path. All four now target the exact reviewed creative charter at [commit 691d3be3caf4](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/blob/691d3be3caf4f345fb14652122b4a3c3bd8dba08/docs/design/CREATIVE_DIRECTION.md); the immutable URL is usable before and after integration. The charter itself is unchanged. Rebuilt only the stored ZIP relationship entry and ZIP metadata; all eight other package entries are byte-identical, all nine CRCs and central directory checks pass, and the original input SHA-256 matched the previous record. Updated the Word digest, byte count and blob above. The new draft still needs actual Word hyperlink-click and full page-layout inspection; no local render or final acceptance is claimed.

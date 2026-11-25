@@ -13,7 +13,7 @@ GDD status is **received**, not proof of approved numerical tuning, production a
 | Artifact | Bytes | SHA-256 | Git blob SHA |
 | --- | ---: | --- | --- |
 | [Full v2.1 Markdown](GDD.md) | 102,269 | `55d43ab2e48073ee555cf521981ea7ca9b9311fc7517d12989566ce75c884005` | `602197d618fa183789f1e3e7e0c2a8b3afc2ec03` |
-| [Full v2.1 Word companion](source/Little_Ray_GDD_v2.1.docx) | 394,283 | `10a837a413d0bb171df8fd7fb66339279f091b16fcaeb2af427475b20b4a5638` | `d313d52c1b032cae4eb400a23555beaca6487219` |
+| [Full v2.1 Word companion](source/Little_Ray_GDD_v2.1.docx) | 394,751 | `f2a8fd83d590e6e7a700b450166842ea64820233f459470e211b3944112812c5` | `1b007f190254c15f33ab38e2caac6a16ab1e2400` |
 | [Creative-direction charter](CREATIVE_DIRECTION.md) | See Git object | Verify against exact reviewed commit | See exact reviewed commit |
 
 The v2.1 hashes were computed from the fetched canonical Markdown and the GitHub-stored Word bytes. DOCX ZIP parts used uncompressed ZIP entries, which permits independent part/CRC checks but differs from the original v2.0 package compression. No visual page-render pass is claimed.
@@ -45,3 +45,8 @@ V1 references the prior Little Rays planning workbook and other project material
 GDD v2.0 section 19 explicitly supersedes the conflicting economy, housing, nursery, rarity, progression and combat rules. Preserve stable species/individual identifiers and compatible runtime/capability work. Earlier intake reviews establish preservation of v1, not acceptance of v2 mechanics. The v2.0 revision has its own [validation record](V2_VALIDATION.md) and exact-head review/integration evidence.
 
 Subsequent approved changes (including DIRECTOR-003) must update the source pointer, summaries and affected task criteria together while retaining history. Actual game behavior, human comprehension, pacing and online fairness still require their own evidence. No public deployment, schedule change or game implementation is performed by this document revision.
+
+
+## Word link correction — 25 November 2026
+
+Independent QA on PR #28 identified four external relationships (rId5–rId8) targeting the wrong sibling path. All four now target the exact reviewed creative charter at [commit 691d3be3caf4](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/blob/691d3be3caf4f345fb14652122b4a3c3bd8dba08/docs/design/CREATIVE_DIRECTION.md); the immutable URL is usable before and after integration. The charter itself is unchanged. Rebuilt only the stored ZIP relationship entry and ZIP metadata; all eight other package entries are byte-identical, all nine CRCs and central directory checks pass, and the original input SHA-256 matched the previous record. Updated the Word digest, byte count and blob above. The new draft still needs actual Word hyperlink-click and full page-layout inspection; no local render or final acceptance is claimed.

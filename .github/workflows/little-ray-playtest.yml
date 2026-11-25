@@ -1,6 +1,11 @@
 name: Little Ray — clickable browser smoke + playtest bundle
 
 on:
+  push:
+    branches: [swarm/director/DIRECTOR-004]
+    paths:
+      - 'prototypes/little-ray-proof/**'
+      - '.github/workflows/little-ray-playtest.yml'
   pull_request:
     branches: [main]
     paths:

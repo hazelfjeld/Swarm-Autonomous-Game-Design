@@ -583,6 +583,70 @@ jobs:
                       "physical_audio_output_verified": False, "actual_site_verified": False}
                   (evidence / "audio-observation.json").write_text(json.dumps(audio_report, indent=2))
                   print(json.dumps(audio_report), flush=True)
+                  # Force an actual IndexedDB write transaction to abort,
+                  # after a real put succeeds but before commit. Keep the fault
+                  # armed for this document so retries cannot silently persist
+                  # its volatile snapshot. No application failure flag is set.
+                  assert saved() == seventh
+                  script("""
+                    window.arch002StorageFault = {aborts: 0, errors: []};
+                    const armed = new WeakSet();
+                    const put = IDBObjectStore.prototype.put;
+                    IDBObjectStore.prototype.put = function(...args) {
+                      const request = Reflect.apply(put, this, args);
+                      const tx = this.transaction;
+                      if (this.name === 'FILE_DATA' && tx.mode === 'readwrite' &&
+                          !armed.has(tx)) {
+                        armed.add(tx);
+                        tx.addEventListener('abort', () => window.arch002StorageFault.aborts++,
+                                            {once: true});
+                        request.addEventListener('success', () => {
+                          try { tx.abort(); }
+                          catch (error) { window.arch002StorageFault.errors.push(String(error)); }
+                        }, {once: true});
+                      }
+                      return request;
+                    };
+                  """)
+                  greet()
+                  def storage_failure():
+                      result = script("""
+                        const warning = document.getElementById('storage-warning');
+                        return {fault: window.arch002StorageFault,
+                                writer: window.littleRayProbeWriter,
+                                state: document.body.dataset.storageState,
+                                visible: !warning.hidden && warning.getBoundingClientRect().height > 0,
+                                message: warning.textContent};
+                      """)
+                      assert not result["fault"]["errors"], result
+                      return result if result["fault"]["aborts"] > 0 else None
+                  fault = until(storage_failure, "actual IndexedDB transaction abort", 20)
+                  assert fault["state"] == "failed" and fault["writer"] is False, fault
+                  assert fault["visible"] and "Save unavailable" in fault["message"], fault
+                  assert saved() == seventh, "Aborted browser transaction changed active save"
+                  assert saved("delivery_probe.json.previous") == touched, "Aborted browser transaction changed recovery copy"
+                  greet()  # Later actions must not persist while the document is faulted.
+                  time.sleep(2)
+                  assert saved() == seventh and saved("delivery_probe.json.previous") == touched
+                  screenshot("11-indexeddb-abort")
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "reload after real storage transaction abort")
+                  assert saved() == seventh and saved("delivery_probe.json.previous") == touched
+                  assert script("return window.littleRayProbeWriter === true && document.getElementById('storage-warning').hidden")
+                  greet()
+                  eighth = until(lambda: greeting_count(8), "single greeting after fresh reload", 20)
+                  assert eighth["revision"] == seventh["revision"] + 1
+                  assert eighth["individual"] == seventh["individual"] and eighth["timer"] == seventh["timer"]
+                  assert until(lambda: saved("delivery_probe.json.previous") == seventh, "post-abort recovery copy")
+                  screenshot("12-indexeddb-recovery")
+                  storage_report = {"browser_indexeddb_abort": "pass",
+                      "source_commit": manifest["source_commit"], "failure": fault,
+                      "before": seventh, "after_reload_retry": eighth,
+                      "fault_injection": "real transaction.abort after put success in disposable CI browser",
+                      "physical_disk_failure_verified": False, "crash_durability_verified": False,
+                      "actual_site_verified": False}
+                  (evidence / "storage-observation.json").write_text(json.dumps(storage_report, indent=2))
+                  print(json.dumps(storage_report), flush=True)
                   print(json.dumps({"browser_smoke": "pass", "source_commit": manifest["source_commit"],
                       "browser": opened["capabilities"].get("browserVersion"),
                       "observations": ["loader completion", "mouse greeting", "IndexedDB persistence",

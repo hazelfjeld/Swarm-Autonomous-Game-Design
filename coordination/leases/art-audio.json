@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "art-audio",
-  "run_id": "art-audio-20261125T1335Z-v7-handoff-92fe",
+  "run_id": null,
   "generation": 43,
-  "acquired_at": "2026-11-25T13:35:22.899Z",
-  "expires_at": "2026-11-25T14:05:22.899Z"
+  "acquired_at": null,
+  "expires_at": null
 }

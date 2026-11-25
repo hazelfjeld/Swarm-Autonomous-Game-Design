@@ -47,6 +47,8 @@ var sell_button: Button
 var sale_note: Label
 var sale_dialog: ConfirmationDialog
 var sale_target: String = ""
+var map_place_mode: bool = false
+var map_mode_button: Button
 
 func label_at(value: String, position_: Vector2, size_: Vector2, font_size: int = 20) -> Label:
 	var item := Label.new()
@@ -107,7 +109,10 @@ func _ready() -> void:
 	cancel_build_button = button_at("Cancel build", Vector2(590, 570), func(): act("cancel_build", ""))
 	cancel_build_button.size = Vector2(142, 42)
 	cancel_build_button.add_theme_font_size_override("font_size", 15)
-	status_label = label_at("Choose a building and coordinates, or tend Blueberry and your farm.", Vector2(30, 617), Vector2(700, 34), 16)
+	map_mode_button = button_at("Map: tend / collect", Vector2(30, 150), toggle_map_mode)
+	map_mode_button.size = Vector2(250, 34)
+	map_mode_button.add_theme_font_size_override("font_size", 15)
+	status_label = label_at("Tap a habitat or farm to collect; switch map mode to choose a placement.", Vector2(30, 617), Vector2(700, 34), 16)
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label_at("DEV CHECKPOINT · Session only; random breeding, battle and production art not yet wired.", Vector2(30, 655), Vector2(1040, 22), 15)
 	ray_choice = option_at(Vector2(30, 685), Vector2(275, 44))
@@ -297,6 +302,77 @@ func place_selected() -> void:
 		else:
 			act(selection[0], "%s,%d,%d" % [selection[1], int(coordinate_x.value), int(coordinate_y.value)])
 
+func toggle_map_mode() -> void:
+	map_place_mode = not map_place_mode
+	map_mode_button.text = "Map: choose placement" if map_place_mode else "Map: tend / collect"
+	status_label.text = "Tap a cell to preview, then confirm below. No Gold spent yet." if map_place_mode else "Tap a habitat or farm to select it and collect ready output."
+	queue_redraw()
+
+func map_cell(point: Vector2) -> Vector2i:
+	# Invert the actual isometric projection, including its current zoom.
+	var origin := iso(0, 0)
+	var axis := iso(1, 0) - origin
+	var delta := point - origin
+	return Vector2i(floori((delta.x / axis.x + delta.y / axis.y) / 2.0), floori((delta.y / axis.y - delta.x / axis.x) / 2.0))
+
+func _gui_input(event: InputEvent) -> void:
+	# GUI consumes child controls first; touch uses the existing mouse emulation.
+	if not (event is InputEventMouseButton):
+		return
+	if event.button_index != MOUSE_BUTTON_LEFT or event.pressed:
+		return
+	if not Rect2(18, 186, 716, 348).has_point(event.position):
+		return
+	var cell := map_cell(event.position)
+	if cell.x < 0 or cell.y < 0 or cell.x >= Model.ISLAND_SIZE or cell.y >= Model.ISLAND_SIZE:
+		return
+	accept_event()
+	if map_place_mode:
+		var parts := selected_placement().split(":")
+		if parts.size() != 2 or not parts[0] in ["build", "move", "restore_building"]:
+			status_label.text = "This action has its own target. Use the confirmation control below."
+			return
+		if cell.x > coordinate_x.max_value or cell.y > coordinate_y.max_value:
+			status_label.text = "That cell is outside the current placement area."
+			return
+		coordinate_x.value = cell.x
+		coordinate_y.value = cell.y
+		status_label.text = "Preview cell (%d,%d) · confirm below to apply." % [cell.x, cell.y]
+		queue_redraw()
+		return
+	for b in city.buildings:
+		var footprint := Rect2i(int(b["x"]), int(b["y"]), int(b["size"]), int(b["size"]))
+		if not footprint.has_point(cell):
+			continue
+		var id: String = str(b["id"])
+		if city.pending(id):
+			status_label.text = "Construction · %ds remaining" % city.construction_remaining()
+			return
+		if city.habitat_ids().has(id):
+			for i in range(habitat_choice.item_count):
+				if habitat_choice.get_item_metadata(i) == id:
+					habitat_choice.select(i)
+					choose_habitat(i)
+					break
+			if city.stored_gold(id) > 0:
+				act("collect", id)
+			else:
+				status_label.text = "%s selected · no whole Gold ready." % b["kind"]
+		elif city.farm_ids().has(id):
+			for i in range(farm_choice.item_count):
+				if farm_choice.get_item_metadata(i) == id:
+					farm_choice.select(i)
+					choose_farm(i)
+					break
+			if not city.farm_crop(id).is_empty() and city.remaining_seconds(id) == 0:
+				act("harvest", id)
+			else:
+				status_label.text = farm_info.text
+		else:
+			status_label.text = "%s selected · see its controls below." % b["kind"]
+		return
+	status_label.text = "Select a building, or switch map mode to preview a placement."
+
 func _process(_delta: float) -> void:
 	var now := Time.get_ticks_msec()
 	var previous_revision: int = city.revision
@@ -441,7 +517,7 @@ func _draw() -> void:
 			var valid: bool = city.can_place(x, y, footprint, selection[1] if selection[0] == "move" else "")
 			var points := PackedVector2Array([iso(x,y),iso(x+footprint,y),iso(x+footprint,y+footprint),iso(x,y+footprint),iso(x,y)])
 			draw_polyline(points, Color("#f3ffe0") if valid else Color("#ffac75"), 3.0, true)
-	ink("Placement: X ↘  Y ↙ · white = free / orange = blocked", Vector2(37, 542), 16)
+	ink("Tap a building to tend · map placement mode previews only" if not map_place_mode else "Tap a cell · white = free / orange = blocked · confirm below", Vector2(37, 542), 15)
 
 func draw_building(b: Dictionary) -> void:
 	var x: float = float(b["x"])
@@ -507,7 +583,9 @@ func draw_placeholder_ray(ray: Vector2, species_id: String, s: float) -> void:
 	draw_circle(ray + Vector2(-15,-5)*s, 2*s, Color.WHITE)
 
 func click_fixture(button: Button) -> void:
-	var point := button.get_global_rect().get_center()
+	await click_point_fixture(button.get_global_rect().get_center())
+
+func click_point_fixture(point: Vector2) -> void:
 	var down := InputEventMouseButton.new()
 	down.position = point
 	down.global_position = point
@@ -544,8 +622,8 @@ func capture_fixture(directory: String) -> void:
 		return
 	# Wait for the real 60-second crop on the normal clock, not a debug grant.
 	await get_tree().create_timer(61.0).timeout
-	await click_fixture(collect_button)
-	await click_fixture(harvest_button)
+	await click_point_fixture(iso(1.5, 1.5))
+	await click_point_fixture(iso(6.0, 4.0))
 	if city.gold < 1192 or city.food != 275 or city.xp != 105 or not city.crop.is_empty() or city.pips != 1:
 		push_error("GUI real-time harvest fixture failed: " + str(city.snapshot()))
 		get_tree().quit(1)
@@ -554,9 +632,21 @@ func capture_fixture(directory: String) -> void:
 	if get_viewport().get_texture().get_image().save_png(directory + "/03-earned-and-harvested.png") != OK:
 		get_tree().quit(1)
 		return
-	print("CITY_GUI_INPUT_PASS: sample, paid planting, feed, real-time resident collect and crop harvest via native mouse events")
+	print("CITY_GUI_INPUT_PASS: sample, paid planting, feed, real-time resident collect and crop harvest by native map clicks")
 	var before_build: int = city.gold
+	await click_fixture(map_mode_button)
+	await click_point_fixture(iso(0.5, 0.5))
+	if not map_place_mode or coordinate_x.value != 0 or coordinate_y.value != 0 or city.gold != before_build or not city.construction.is_empty():
+		push_error("GUI occupied cell preview changed city or missed click")
+		get_tree().quit(1)
+		return
+	await click_point_fixture(iso(3.5, 0.5))
+	if coordinate_x.value != 3 or coordinate_y.value != 0 or city.gold != before_build:
+		push_error("GUI free cell preview missed click or charged before confirmation")
+		get_tree().quit(1)
+		return
 	await click_fixture(build_button)
+	await click_fixture(map_mode_button)
 	if city.gold != before_build - 200 or city.construction.is_empty() or city.find_building("building-1").is_empty():
 		push_error("GUI placement fixture failed: " + str(city.snapshot()))
 		get_tree().quit(1)
@@ -570,7 +660,7 @@ func capture_fixture(directory: String) -> void:
 	if get_viewport().get_texture().get_image().save_png(directory + "/04-built-light-habitat.png") != OK:
 		get_tree().quit(1)
 		return
-	print("CITY_BUILD_GUI_PASS: paid Light habitat placement and ordinary 30-second construction")
+	print("CITY_BUILD_GUI_PASS: occupied/free map-cell previews without spending, explicit paid Light habitat confirmation and ordinary 30-second construction")
 	var before_egg: int = city.gold
 	await click_fixture(buy_button)
 	if city.gold != before_egg - 100 or city.founder_egg.is_empty():
@@ -639,10 +729,15 @@ func capture_fixture(directory: String) -> void:
 		if build_choice.get_item_metadata(i) == "restore_building:farm-1":
 			build_choice.select(i)
 			break
-	coordinate_x.value = 5
-	coordinate_y.value = 3
 	refresh()
+	await click_fixture(map_mode_button)
+	await click_point_fixture(iso(5.5, 3.5))
+	if coordinate_x.value != 5 or coordinate_y.value != 3 or city.gold != before_store:
+		push_error("GUI expanded zoom restore preview failed")
+		get_tree().quit(1)
+		return
 	await click_fixture(build_button)
+	await click_fixture(map_mode_button)
 	if not city.farm_ids().has("farm-1") or city.gold != before_store or city.xp != 365:
 		push_error("GUI farm restore failed")
 		get_tree().quit(1)

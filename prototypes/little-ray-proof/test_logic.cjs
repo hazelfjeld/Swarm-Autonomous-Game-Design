@@ -1,10 +1,10 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const src=fs.readFileSync(__dirname+'/index.html','utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
 let current=1700000000000;const memory=new Map();
-function start(rng=0.99){const elems={};function el(id){return elems[id]??(elems[id]={innerHTML:'',textContent:'',dataset:{},addEventListener(){},onclick:null,classList:{toggle(){}}})}
+function start(rng=0.99,storage={}){const elems={};function el(id){return elems[id]??(elems[id]={innerHTML:'',textContent:'',dataset:{},addEventListener(){},onclick:null,classList:{toggle(){}}})}
 const win={},timers=[];class TestDate extends Date{static now(){return current}}
 const fixedMath=Object.create(Math);fixedMath.random=()=>rng;
-const context={Date:TestDate,document:{querySelector:el,querySelectorAll:()=>[]},window:win,localStorage:{getItem:k=>memory.get(k)??null,setItem:(k,v)=>memory.set(k,v)},setInterval:fn=>{timers.push(fn);return timers.length},structuredClone,console,Math:fixedMath,JSON,confirm:()=>true};vm.runInNewContext(src,context);return{debug:win.LittleRayDebug,tick:()=>timers.forEach(fn=>fn())}}
+const context={Date:TestDate,document:{querySelector:el,querySelectorAll:()=>[]},window:win,localStorage:{getItem:k=>{if(storage.failRead)throw Error('Read denied');return memory.get(k)??null},setItem:(k,v)=>{if(storage.failWrite)throw Error('Write denied');memory.set(k,v)}},setInterval:fn=>{timers.push(fn);return timers.length},structuredClone,console,Math:fixedMath,JSON,confirm:()=>storage.confirmReset!==false};vm.runInNewContext(src,context);return{debug:win.LittleRayDebug,tick:()=>timers.forEach(fn=>fn()),el}}
 const {debug,tick}=start();const stat=()=>debug.getState();const advance=n=>{current+=n*1000;tick()};
 assert.equal(stat().rays.length,2);
 advance(3);const bank=Math.floor(stat().storedGold);assert.ok(bank>0);debug.action('collect');assert.equal(stat().gold,1200+bank);assert.equal(stat().goals.collect,true);
@@ -77,3 +77,31 @@ api.action('attack');assert.equal(state().battle.allies[2].signatureCooldown,0);
 const prior=JSON.parse(memory.get('little-ray-proof-v01'));prior.battle.allies.forEach(a=>delete a.signatureCooldown);memory.set('little-ray-proof-v01',JSON.stringify(prior));reload();
 const beforeOld=state().battle.turn;api.action('special');assert.ok(state().battle.finished||state().battle.turn===beforeOld+1);assert.ok(state().battle.allies.some(a=>a.signatureCooldown===1));
 console.log(JSON.stringify({pass:true,regressions:['personal signature cooldown','cooldown rejects repeated action without consuming a turn','cooldown persists after reload','basic and guard recover only the acting ray','older active battle remains playable']}));
+
+// Save-loss regression: preserve unknown or externally changed profile bytes.
+const saveKey='little-ray-proof-v01';
+memory.clear();run=start();api=run.debug;api.action('plant',0);
+const originalSave=memory.get(saveKey);
+const denied={failRead:true,confirmReset:false};run=start(.99,denied);api=run.debug;
+assert.equal(memory.get(saveKey),originalSave);
+assert.ok(run.el('#saveStatus').textContent.includes('could not be read'));
+denied.failRead=false;api.action('feed',1);elapsed(11);
+assert.equal(memory.get(saveKey),originalSave);
+run.el('#reset').onclick();assert.equal(memory.get(saveKey),originalSave);
+reload();assert.equal(state().gold,1160);assert.ok(state().crops[0]);
+for(const bad of ['{','null','{}','{"v":1,"rays":[]}']){
+  memory.clear();memory.set(saveKey,bad);run=start();api=run.debug;elapsed(11);
+  assert.equal(memory.get(saveKey),bad);
+  assert.ok(run.el('#saveStatus').textContent.includes('could not be read'));
+  run.el('#reset').onclick();assert.equal(JSON.parse(memory.get(saveKey)).gold,1200);
+}
+memory.clear();const stale=start(),writer=start();writer.debug.action('feed',1);
+const newerSave=memory.get(saveKey);
+stale.debug.action('plant',0);current+=11000;stale.tick();
+assert.equal(memory.get(saveKey),newerSave);
+assert.equal(JSON.parse(memory.get(saveKey)).food,220);
+assert.ok(stale.el('#saveStatus').textContent.includes('another window'));
+stale.el('#reset').onclick();assert.equal(JSON.parse(memory.get(saveKey)).food,240);
+memory.clear();run=start(.99,{failWrite:true});
+assert.equal(memory.size,0);assert.ok(run.el('#saveStatus').textContent.includes('Save unavailable'));
+console.log(JSON.stringify({pass:true,regressions:['read denial never overwrites existing profile','invalid JSON/profile preserved until explicit reset','cancelled reset preserves save','stale sequential window cannot overwrite changed profile','write failure warning']}));

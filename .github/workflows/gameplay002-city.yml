@@ -1,0 +1,81 @@
+name: GAMEPLAY-002 exact-head city checkpoint
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'game/city_checkpoint/**'
+      - '.github/workflows/gameplay002-city.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gameplay002-city
+  cancel-in-progress: true
+
+jobs:
+  city:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'swarm/gameplay/GAMEPLAY-002'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify official engine and templates
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          cd "$RUNNER_TEMP"
+          base=https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable
+          curl --fail --location --retry 2 --connect-timeout 20 --max-time 420 "$base/Godot_v4.7.2-stable_linux.x86_64.zip" -o editor.zip
+          curl --fail --location --retry 2 --connect-timeout 20 --max-time 600 "$base/Godot_v4.7.2-stable_export_templates.tpz" -o templates.tpz
+          printf '%s\n' 'cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4  editor.zip' 'f298490b8d44d934be425a5a65a51bf15f422428b229a06a6e11d9ffea248011  templates.tpz' | sha256sum --check --strict
+          unzip -q editor.zip
+          chmod +x Godot_v4.7.2-stable_linux.x86_64
+          test "$(./Godot_v4.7.2-stable_linux.x86_64 --version)" = '4.7.2.stable.official.ed1daf0bf'
+          target="$HOME/.local/share/godot/export_templates/4.7.2.stable"
+          mkdir -p "$target"
+          unzip -j -q templates.tpz templates/version.txt templates/web_nothreads_release.zip templates/web_nothreads_debug.zip -d "$target"
+      - name: Native import and deterministic state tests
+        run: |
+          set -euo pipefail
+          godot="$RUNNER_TEMP/Godot_v4.7.2-stable_linux.x86_64"
+          "$godot" --headless --path game/city_checkpoint --editor --import
+          "$godot" --headless --path game/city_checkpoint --script res://tests.gd
+          "$godot" --headless --path game/city_checkpoint --quit-after 5
+      - name: Single-thread web export
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/city-build"
+          "$RUNNER_TEMP/Godot_v4.7.2-stable_linux.x86_64" --headless --path game/city_checkpoint --export-release Web "$RUNNER_TEMP/city-build/index.html"
+          test -s "$RUNNER_TEMP/city-build/index.wasm"
+          test -s "$RUNNER_TEMP/city-build/index.pck"
+          git rev-parse HEAD > "$RUNNER_TEMP/city-build/source-commit.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: city-web-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/city-build
+          if-no-files-found: error
+          retention-days: 3
+      - name: Native GUI input and screenshot fixture
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/city-evidence"
+          command -v xvfb-run
+          timeout 60 xvfb-run -a "$RUNNER_TEMP/Godot_v4.7.2-stable_linux.x86_64" --path game/city_checkpoint --audio-driver Dummy -- --capture-city "$RUNNER_TEMP/city-evidence"
+          test -s "$RUNNER_TEMP/city-evidence/01-opening.png"
+          test -s "$RUNNER_TEMP/city-evidence/02-after-input.png"
+          git rev-parse HEAD > "$RUNNER_TEMP/city-evidence/source-commit.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: city-native-evidence-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/city-evidence
+          if-no-files-found: warn
+          retention-days: 3

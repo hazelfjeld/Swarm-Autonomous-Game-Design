@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 36,
-  "run_id": "director-20261125T0705Z-doclinks-g36",
-  "acquired_at": "2026-11-25T07:05:03.230Z",
-  "expires_at": "2026-11-25T07:35:03.230Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

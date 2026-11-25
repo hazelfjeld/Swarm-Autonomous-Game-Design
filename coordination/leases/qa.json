@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "qa",
-  "run_id": null,
-  "generation": 46,
-  "acquired_at": null,
-  "expires_at": null
+  "run_id": "qa-20261125T1943Z-g47-browser-review",
+  "generation": 47,
+  "acquired_at": "2026-11-25T19:44:18.230Z",
+  "expires_at": "2026-11-25T20:14:18.230Z"
 }

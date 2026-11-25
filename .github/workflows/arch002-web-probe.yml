@@ -466,6 +466,45 @@ jobs:
                       "observations": ["second tab denied engine mount", "live-owner takeover refused",
                                        "old owner persisted progress", "explicit takeover after close",
                                        "new writer loads latest revision"], "actual_site_verified": False}), flush=True)
+                  # Exercise the normal greeting control using browser-generated touch
+                  # events, not JavaScript click(), direct game calls or mouse actions.
+                  def cdp(cmd, params):
+                      return api("POST", session + "/goog/cdp/execute", {"cmd": cmd, "params": params})
+                  cdp("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 1})
+                  api("POST", session + "/refresh", {})
+                  b = until(canvas_ready, "touch-enabled loader")
+                  assert saved() == fifth, "Touch-mode reload changed profile"
+                  assert script("return navigator.maxTouchPoints") >= 1
+                  script("""
+                    window.arch002TouchEvents = [];
+                    for (const type of ['touchstart', 'touchend', 'touchcancel']) {
+                      document.addEventListener(type, e => window.arch002TouchEvents.push({
+                        type: e.type, trusted: e.isTrusted,
+                        canvas: e.target instanceof HTMLCanvasElement
+                      }), {capture: true, passive: true});
+                    }
+                  """)
+                  point = {"x": round(b["x"] + b["width"] * 0.5),
+                           "y": round(b["y"] + b["height"] * (335 / 820)), "id": 0}
+                  cdp("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [point]})
+                  time.sleep(0.1)
+                  cdp("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+                  events = script("return window.arch002TouchEvents")
+                  assert [e["type"] for e in events] == ["touchstart", "touchend"], events
+                  assert all(e["trusted"] and e["canvas"] for e in events), events
+                  touched = until(lambda: greeting_count(6), "touch greeting persisted")
+                  assert touched["revision"] == fifth["revision"] + 1
+                  assert touched["individual"] == fifth["individual"] and touched["timer"] == fifth["timer"]
+                  assert until(lambda: saved("delivery_probe.json.previous") == fifth, "touch recovery copy")
+                  time.sleep(2)
+                  assert saved() == touched, "One touch caused duplicate or delayed mutation"
+                  screenshot("09-touch-greeting")
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "reload after touch greeting")
+                  assert saved() == touched and saved("delivery_probe.json.previous") == fifth
+                  print(json.dumps({"browser_emulated_touch": "pass", "source_commit": manifest["source_commit"],
+                      "events": events, "physical_device_verified": False,
+                      "actual_site_verified": False, "audio_verified": False}), flush=True)
                   print(json.dumps({"browser_smoke": "pass", "source_commit": manifest["source_commit"],
                       "browser": opened["capabilities"].get("browserVersion"),
                       "observations": ["loader completion", "mouse greeting", "IndexedDB persistence",

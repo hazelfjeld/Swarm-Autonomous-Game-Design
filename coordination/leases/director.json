@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 61,
-  "run_id": "mountain-mover-keyboard-20261125T2352Z",
-  "acquired_at": "2026-11-25T23:51:56.691Z",
-  "expires_at": "2026-11-26T00:21:56.691Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

@@ -496,6 +496,46 @@ func act(kind: String, value: String) -> void:
 			preview_origin = placement_coordinates()
 	refresh()
 
+# Read-only projection of the same housing validator used by the command.
+# Disabled previews never reserve a home, spend Gold, or consume the egg.
+func refresh_founder_controls() -> void:
+	var founder_id: String = str(shop_choice.get_item_metadata(shop_choice.selected))
+	var gate: int = int(Model.FOUNDER_GATES[founder_id])
+	var buy_reason: String = ""
+	if city.find_building("hatchery-1").is_empty():
+		buy_reason = "Restore hatchery"
+	elif not city.founder_egg.is_empty():
+		buy_reason = "Hatchery occupied"
+	elif city.account_level() < gate:
+		buy_reason = "Unlock at Lv %d" % gate
+	elif city.gold < 100:
+		buy_reason = "Need 100 Gold"
+	buy_button.disabled = not buy_reason.is_empty()
+	buy_button.text = buy_reason if buy_button.disabled else "Buy founder egg"
+	buy_button.tooltip_text = buy_reason
+	place_egg_button.disabled = true
+	place_egg_button.tooltip_text = ""
+	if city.founder_egg.is_empty():
+		egg_info.text = "Restore hatchery from storage" if city.find_building("hatchery-1").is_empty() else "Hatchery empty · buy a founder"
+		return
+	var species_id: String = str(city.founder_egg["species"])
+	var egg_name: String = str(Model.SPECIES[species_id]["name"])
+	if city.founder_remaining() > 0:
+		egg_info.text = "%s · %ds to hatch" % [egg_name, city.founder_remaining()]
+		return
+	var error: String = city.housing_error(species_id, selected_habitat)
+	place_egg_button.disabled = not error.is_empty()
+	place_egg_button.tooltip_text = error
+	if error.is_empty():
+		egg_info.text = "%s ready · Place in selected habitat." % egg_name
+		return
+	var elements: String = " or ".join(PackedStringArray(Model.SPECIES[species_id]["elements"]))
+	for habitat_id in city.habitat_ids():
+		if city.housing_error(species_id, habitat_id).is_empty():
+			egg_info.text = "%s ready · Choose %s habitat with space." % [egg_name, elements]
+			return
+	egg_info.text = "%s ready · No free %s housing. Build, upgrade or move a resident." % [egg_name, elements]
+
 func refresh() -> void:
 	wallet.text = "GOLD  %d     ·     FOOD  %d     ·     ACCOUNT LV %d  (%d XP)" % [city.gold, city.food, city.account_level(), city.xp]
 	refresh_roster()
@@ -522,13 +562,7 @@ func refresh() -> void:
 	level_button.text = "Lv +1 · %d Food" % next_cost if next_cost > 0 else "Level cap"
 	level_button.tooltip_text = "Complete %d remaining feed pips for %d Food." % [4 - int(ray["pips"]), next_cost] if next_cost > 0 else "Maximum trainable level in this slice."
 	move_ray_button.disabled = ray["habitat_id"] == selected_habitat
-	buy_button.disabled = city.find_building("hatchery-1").is_empty() or not city.founder_egg.is_empty() or city.gold < 100
-	place_egg_button.disabled = city.founder_egg.is_empty() or city.founder_remaining() > 0
-	if city.founder_egg.is_empty():
-		egg_info.text = "Restore hatchery from storage" if city.find_building("hatchery-1").is_empty() else "Hatchery empty · buy a founder"
-	else:
-		var egg_name: String = str(Model.SPECIES[city.founder_egg["species"]]["name"])
-		egg_info.text = "%s · %ds to hatch" % [egg_name, city.founder_remaining()] if city.founder_remaining() > 0 else "%s ready! Select compatible housing." % egg_name
+	refresh_founder_controls()
 	collection_info.text = "Collection %d/%d discovered · %d owned · inspect species and sources" % [city.discoveries.size(), Model.SPECIES.size(), city.individuals.size()]
 	var marked: bool = bool(ray.get("favorite", false))
 	favorite_button.text = "Unmark favorite" if marked else "Mark favorite"
@@ -740,6 +774,15 @@ func capture_fixture(directory: String) -> void:
 		push_error("Opening collection projection incorrect")
 		get_tree().quit(1)
 		return
+	# A locked founder must be visibly unavailable and not debit the wallet.
+	shop_choice.select(2)
+	refresh()
+	if not buy_button.disabled or buy_button.text != "Unlock at Lv 4" or city.gold != 1200 or city.revision != 0:
+		push_error("Locked founder preview failed")
+		get_tree().quit(1)
+		return
+	shop_choice.select(0)
+	refresh()
 	await click_fixture(sample_button)
 	await click_fixture(plant_short)
 	await click_fixture(feed_button)
@@ -805,9 +848,31 @@ func capture_fixture(directory: String) -> void:
 		get_tree().quit(1)
 		return
 	await get_tree().create_timer(31.0).timeout
+	# The starter Tide habitat cannot house a Light founder. A native click
+	# on the disabled button must leave the ready egg and wallet untouched.
+	habitat_choice.select(0)
+	choose_habitat(0)
+	refresh()
+	var blocked_revision: int = city.revision
+	var blocked_gold: int = city.gold
+	var blocked_egg: Dictionary = city.founder_egg.duplicate(true)
+	if not place_egg_button.disabled or not egg_info.text.contains("Choose Light habitat with space") or not place_egg_button.tooltip_text.contains("Element mismatch"):
+		push_error("Ready founder housing guidance failed")
+		get_tree().quit(1)
+		return
+	await click_fixture(place_egg_button)
+	if city.revision != blocked_revision or city.gold != blocked_gold or city.founder_egg != blocked_egg or city.individuals.size() != 1:
+		push_error("Disabled mismatched placement changed state")
+		get_tree().quit(1)
+		return
 	# Selection is set programmatically; purchase and claim use native mouse events.
 	habitat_choice.select(1)
 	choose_habitat(1)
+	refresh()
+	if place_egg_button.disabled or not egg_info.text.contains("Place in selected habitat"):
+		push_error("Compatible founder placement did not become available")
+		get_tree().quit(1)
+		return
 	await click_fixture(place_egg_button)
 	if city.individuals.size() != 2 or city.individuals["ray-2"]["species"] != "sunbeam" or city.individuals["ray-2"]["habitat_id"] != "building-1" or city.xp != 355:
 		push_error("GUI founder placement failed: " + str(city.snapshot()))

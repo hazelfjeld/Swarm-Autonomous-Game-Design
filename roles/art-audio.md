@@ -18,9 +18,10 @@ Use the live GDD version and status in config. Little Ray v2.0 follows the user 
 
 Read [config/skill_sources.json](../config/skill_sources.json) and [the source-loading procedure](../docs/SKILL_SOURCES.md) each run. Fetch every source assigned to `art-audio` from its explicit GitHub repository at the pinned SHA, then required and task-relevant referenced files at the same SHA.
 
+- `ai-art` (primary): [Personalized Creative Director & Art Critic](https://github.com/hazelfjeld/AI-Art-Skill/blob/9a0ba5c60dfe4de86be7dff7d569e07969f2d225/SKILL.md) at `9a0ba5c60dfe4de86be7dff7d569e07969f2d225` (source `hazelfjeld/AI-Art-Skill`, root `SKILL.md`).
 - `game-designer` (supporting): [game-designer/SKILL.md](https://github.com/hazelfjeld/Game-Design-AI-Skill/blob/dc26ddb18adc18fbbe2221a8443a71a260de6022/game-designer/SKILL.md) at `dc26ddb18adc18fbbe2221a8443a71a260de6022`.
 
-Supporting source: game-designer, especially game-feel-and-accessibility for presentation and feedback. Read its pinned SKILL.md, required shared-work guidance, and relevant presentation modules. Retain complete available native image/audio/animation skills for their actual tools; do not assume an unavailable tool or paid account exists.
+Primary source: ai-art. Read its pinned root SKILL.md, required Little Ray adapter and calibrated taste profile, and task-specific critique/revision/creature references at the same SHA. Treat taste evidence as guidance rather than Hazel's visual approval. Supporting source: game-designer, especially game-feel-and-accessibility for presentation and feedback; keep its required production-and-collaboration module and relevant presentation modules. Retain complete available native image/audio/animation skills for their actual tools; do not assume an unavailable tool or paid account exists.
 
 An installed copy substitutes only with verified matching repository/version/content provenance; otherwise read the canonical GitHub source. Record the exact source SHA and modules actually read in the run report. If retrieval fails, report the unread source and continue only bounded work that can proceed independently; never claim unread skill usage. Do not install/modify personal skills or edit source skill repositories.
 
@@ -29,6 +30,10 @@ An installed copy substitutes only with verified matching repository/version/con
 Use the received GDD and design baseline as the brief. Inspect existing ART-001 #6 capability evidence; finish one still-needed asset-tool check, or resume ART-002 #10 treatment trials / ART-003 #11 representative assets according to live dependencies. Preserve approved direction and deliver actual asset evidence rather than requesting the GDD again.
 
 Read the actual role startup/registry issue through [the board](../docs/BOARD.md). If its work is already Done, preserve it and select one eligible assigned task or explicit review handoff; do not manufacture a repeat assessment. The [first-slice plan](../docs/design/FIRST_SLICE.md) links the production issues, whose live bodies own status and dependencies.
+
+## Owner-approved Little Ray art workflow
+
+For ART-002 #10, preserve Hazel's rejection of both original pixel/cartoon trials. Inspect the actual approved baby-manta reference and current GDD before using the calibrated taste profile. The original cleared artwork must retain the friendly near eye, protruding snoot, broad floppy wings, pale underside and long tapering tail. Compare candidates and the reference at equal **gameplay display size** in populated city habitats and a six-actor battle. Use a genuinely independent creator/critic pass, a hard-gate subject/style check and bounded revisions (the skill's default maximum is three autonomous revision attempts). Record **concept verdict** and **finished-asset verdict** separately with inspected image/version/provenance. Never self-approve a material art treatment; Hazel's visual choice, independent QA and architect integration remain required. ART-003 #11 remains Blocked until its real prerequisites are satisfied.
 
 ## Recurring responsibilities
 

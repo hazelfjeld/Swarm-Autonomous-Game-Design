@@ -105,3 +105,45 @@ stale.el('#reset').onclick();assert.equal(JSON.parse(memory.get(saveKey)).food,2
 memory.clear();run=start(.99,{failWrite:true});
 assert.equal(memory.size,0);assert.ok(run.el('#saveStatus').textContent.includes('Save unavailable'));
 console.log(JSON.stringify({pass:true,regressions:['read denial never overwrites existing profile','invalid JSON/profile preserved until explicit reset','cancelled reset preserves save','stale sequential window cannot overwrite changed profile','write failure warning']}));
+
+
+// QA-FIX-004: parseable but invalid identities must never be autosaved.
+memory.clear();run=start();api=run.debug;
+const validIdentitySave=JSON.parse(memory.get(saveKey));
+const corruptions=[
+  p=>{delete p.nextId},
+  p=>{p.nextId=1},
+  p=>{p.nextId=2.5},
+  p=>{p.nextId=Number.MAX_SAFE_INTEGER+1},
+  p=>{p.rays[1].id=1},
+  p=>{p.rays[1].id=null},
+  p=>{p.rays[1].id=-2},
+  p=>{p.rays[1].id=2.5},
+  p=>{p.rays[1].kind='not-a-ray'},
+  p=>{p.rays[1].kind='constructor'},
+  p=>{p.hatch.kind='not-a-ray'},
+  p=>{p.breed={until:current+18000,kind:'__proto__'}}
+];
+for(const corrupt of corruptions){
+  memory.clear();const p=JSON.parse(JSON.stringify(validIdentitySave));
+  p.hatch={until:current-1,kind:'pearlcloud'};p.lastTick=current;corrupt(p);
+  const bytes=JSON.stringify(p);memory.set(saveKey,bytes);
+  run=start(.99,{confirmReset:false});api=run.debug;
+  assert.equal(memory.get(saveKey),bytes);
+  assert.ok(run.el('#saveStatus').textContent.includes('could not be read'));
+  api.action('claim');api.action('feed',1);elapsed(11);
+  assert.equal(memory.get(saveKey),bytes);
+  run.el('#reset').onclick();assert.equal(memory.get(saveKey),bytes);
+  run=start(.99,{confirmReset:true});run.el('#reset').onclick();
+  assert.equal(JSON.parse(memory.get(saveKey)).nextId,3);
+}
+memory.clear();const sparse=JSON.parse(JSON.stringify(validIdentitySave));
+sparse.rays[1].id=8;sparse.nextId=19;sparse.hatch={until:current-1,kind:'pearlcloud'};sparse.lastTick=current;
+memory.set(saveKey,JSON.stringify(sparse));run=start();api=run.debug;
+api.action('claim');api.action('claim');assert.deepEqual(state().rays.map(r=>r.id),[1,8,19]);assert.equal(state().nextId,20);
+reload();assert.deepEqual(state().rays.map(r=>r.id),[1,8,19]);
+memory.clear();const exhausted=JSON.parse(JSON.stringify(validIdentitySave));
+exhausted.nextId=Number.MAX_SAFE_INTEGER;exhausted.hatch={until:current-1,kind:'pearlcloud'};exhausted.lastTick=current;
+memory.set(saveKey,JSON.stringify(exhausted));run=start();api=run.debug;api.action('claim');
+assert.equal(state().rays.length,2);assert.equal(state().nextId,Number.MAX_SAFE_INTEGER);assert.ok(state().hatch);
+console.log(JSON.stringify({pass:true,regressions:['12 corrupt identity/kind cases preserve original bytes through action/tick/cancel and permit explicit reset','valid sparse identities and duplicate claim','safe ID exhaustion refuses claim']}));

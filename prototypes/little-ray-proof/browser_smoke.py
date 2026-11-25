@@ -40,6 +40,8 @@ def desktop_journey(browser):
     page = open_game(context, errors)
     try:
         check(len(state(page)["rays"]) == 2, "Two starter rays")
+        check(page.locator('[data-sector-state="owned"]').count() == 4 and page.locator('[data-sector-state="next"]').count() == 1, "Fresh island draws four owned sectors and one highlighted frontier")
+        expect(page.locator('#view [data-act="expand"]')).to_be_disabled()
         collect = page.locator('#view [data-act="collect"]')
         initial_gold = state(page)["gold"]
         expect(collect).to_be_enabled(timeout=10000)
@@ -102,13 +104,17 @@ def desktop_journey(browser):
             page.locator('#view [data-act="special"]').click()
         check(state(page)["battle"]["won"] is True, "3v3 encounter won through UI buttons")
         page.locator('#view [data-act="endBattle"]').click()
+        wallet_before = state(page)["gold"]
+        page.screenshot(path=str(OUT / "island-before-expansion.png"), full_page=True)
         page.locator('#view [data-act="expand"]').click()
-        check(state(page)["land"] == 5, "Island sector purchased through UI")
+        check(state(page)["land"] == 5 and state(page)["gold"] == wallet_before - 200, "Island sector purchased through map control with exact debit")
+        check(page.locator('[data-sector="4"][data-sector-state="owned"]').count() == 1 and page.locator('[data-sector="5"][data-sector-state="next"]').count() == 1 and page.locator('[data-sector-state="owned"]').count() == 5, "Purchased terrain appears and frontier advances on actual rendered map")
         before = state(page)
         page.reload(wait_until="load")
         after = state(page)
         check(all(after[key] == before[key] for key in ("land", "rays", "gold", "food", "battles", "crops")),
               "Island, individual levels, currencies, battle count and crops persist across browser reload")
+        check(page.locator('[data-sector="4"][data-sector-state="owned"]').count() == 1 and page.locator('[data-sector-state="owned"]').count() == 5, "Purchased map tile remains visible after reload")
         check(not errors, "No uncaught JavaScript errors")
         page.screenshot(path=str(OUT / "desktop.png"), full_page=True)
         print("DESKTOP_BROWSER_PASS", json.dumps({"rays": len(after["rays"]), "land": after["land"], "battles": after["battles"]}))
@@ -125,6 +131,8 @@ def mobile_journey(browser):
     errors = []
     page = open_game(context, errors)
     try:
+        check(page.locator('[data-sector-state="owned"]').count() == 4, "Fresh sector map renders on mobile")
+        check(page.locator(".map-toolbar").bounding_box()["width"] <= 390, "Map controls fit the mobile viewport")
         page.locator('#view [data-act="plant"][data-i="0"]').tap()
         check(state(page)["crops"][0] is not None, "Touch planting works at mobile viewport")
         page.locator('#nav [data-view="rays"]').tap()

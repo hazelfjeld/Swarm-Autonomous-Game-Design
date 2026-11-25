@@ -52,8 +52,9 @@
       IDBDatabase.prototype.transaction = function(...args) {
         // Match the probe's IDBFS store before creating the transaction:
         // transaction() itself can throw synchronously (e.g. closed database).
+        // FILE_DATA is a store name, not necessarily the database name.
         const stores = typeof args[0] === "string" ? [args[0]] : args[0];
-        const probeWrite = this.name === "FILE_DATA" && args[1] === "readwrite" &&
+        const probeWrite = args[1] === "readwrite" && this.objectStoreNames.contains("FILE_DATA") &&
           Array.isArray(stores) && stores.includes("FILE_DATA");
         let tx;
         try {
@@ -62,7 +63,7 @@
           if (probeWrite) storageFailed();
           throw error;
         }
-        if (this.name === "FILE_DATA" && tx.mode === "readwrite" && tx.objectStoreNames.contains("FILE_DATA")) {
+        if (tx.mode === "readwrite" && tx.objectStoreNames.contains("FILE_DATA")) {
           tx.addEventListener("abort", storageFailed, {once: true});
         }
         return tx;

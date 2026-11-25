@@ -718,18 +718,31 @@ jobs:
                   refusal = api("POST", session + "/execute/async", {"args": [], "script": """
                     const done = arguments[arguments.length - 1];
                     (async () => {
-                      if (!(await indexedDB.databases()).some(info => info.name === 'FILE_DATA'))
-                        throw new Error('Expected existing probe IDBFS database');
-                      const db = await new Promise((resolve, reject) => {
-                        const r = indexedDB.open('FILE_DATA');
-                        r.onsuccess = () => resolve(r.result);
-                        r.onerror = () => reject(r.error);
-                      });
-                      if (!db.objectStoreNames.contains('FILE_DATA')) {
-                        db.close();
-                        throw new Error('Expected probe object store');
+                      // Locate the mounted database using the persisted active file.
+                      // FILE_DATA is the object store, not necessarily the database name.
+                      const matches = [];
+                      for (const info of await indexedDB.databases()) {
+                        if (!info.name) continue;
+                        const candidate = await new Promise((resolve, reject) => {
+                          const r = indexedDB.open(info.name);
+                          r.onsuccess = () => resolve(r.result);
+                          r.onerror = () => reject(r.error);
+                        });
+                        try {
+                          if (!candidate.objectStoreNames.contains('FILE_DATA')) continue;
+                          const keys = await new Promise((resolve, reject) => {
+                            const r = candidate.transaction('FILE_DATA', 'readonly')
+                                               .objectStore('FILE_DATA').getAllKeys();
+                            r.onsuccess = () => resolve(r.result);
+                            r.onerror = () => reject(r.error);
+                          });
+                          if (keys.some(key => String(key).endsWith('/delivery_probe.json')))
+                            matches.push(candidate);
+                        } finally { candidate.close(); }
                       }
-                      db.close();
+                      if (matches.length !== 1)
+                        throw new Error('Expected exactly one existing probe IDBFS database');
+                      const db = matches[0];
                       const attempt = mode => {
                         try { db.transaction('FILE_DATA', mode); return 'unexpected success'; }
                         catch (e) { return e.name; }
@@ -738,7 +751,7 @@ jobs:
                       const writerAfterReadonly = window.littleRayProbeWriter;
                       const write = attempt('readwrite');
                       const warning = document.getElementById('storage-warning');
-                      return {readonly, writerAfterReadonly, write,
+                      return {database: db.name, readonly, writerAfterReadonly, write,
                               writer: window.littleRayProbeWriter,
                               state: document.body.dataset.storageState,
                               visible: !warning.hidden && warning.getBoundingClientRect().height > 0,

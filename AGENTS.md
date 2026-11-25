@@ -17,7 +17,7 @@ At every run read, in order:
 ## Bound skill loading
 
 - [config/skill_sources.json](config/skill_sources.json) is the authoritative source/version manifest. Read it each run; fetch every assigned SKILL.md and the required/task-relevant modules using the exact pinned SHA. Do not silently follow source `main` or bulk load books/references.
-- Director uses game-designer as primary guidance; architect uses technical-architect as primary guidance. Gameplay, art/audio, and QA use the documented supporting bindings. No extra dedicated skill repositories are assumed.
+- Director uses game-designer as primary guidance; architect uses technical-architect as primary guidance; art/audio uses the pinned owner-supplied ai-art source as its primary art/critique guide plus game-designer for shared game constraints. Gameplay and QA retain the documented supporting bindings. Read each assigned source at the exact manifest SHA; the AI Art Skill neither provides new tools nor approves its own visual output.
 - The game-designer skill requires its production-and-collaboration module for shared/scheduled work; load it for every role using that skill here.
 - An installed copy substitutes only when its repository, commit SHA, and content provenance match the manifest. Otherwise read the canonical GitHub files. Do not install/modify personal skills or write to source skill repositories during role work.
 - Record repository, exact SHA, files actually read, and retrieval failures in `templates/RUN_REPORT.md`. If retrieval fails, report the limitation and continue bounded authorized work independent of the unavailable guidance. Never claim unread skills were used.

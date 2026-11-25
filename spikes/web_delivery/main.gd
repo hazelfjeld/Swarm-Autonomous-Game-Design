@@ -79,10 +79,10 @@ func _greet() -> void:
 		sound.play() # Invoked only by a normal button gesture; never autoplay.
 
 func _commit(candidate: Dictionary, tick: int) -> bool:
-	var result: Dictionary = store.save(candidate)
+	var result: Dictionary = store.save(candidate, int(state.revision))
 	status_label.text = result.reason
 	if result.ok:
-		state = candidate.duplicate(true)
+		state = result.state.duplicate(true)
 		timer_base = state.timer.duplicate(true)
 		timer_anchor_ms = tick
 		next_checkpoint_ms = tick + CHECKPOINT_MS

@@ -20,6 +20,7 @@ func decode(text: String) -> Dictionary:
 	var decoded: Dictionary = parser.data.duplicate(true)
 	decoded.schema_version = 1
 	decoded.greetings = int(decoded.greetings)
+	decoded.revision = int(decoded.get("revision", 0))
 	decoded.timer = TimerState.normalized(decoded.timer) if decoded.has("timer") else TimerState.fresh()
 	return {"ok": true, "state": decoded}
 
@@ -34,16 +35,26 @@ func load_state() -> Dictionary:
 	result["reason"] = "Loaded probe save." if result.ok else "Save unavailable: " + result.reason
 	return result
 
-func save(candidate: Dictionary) -> Dictionary:
+func save(candidate: Dictionary, expected_revision: int) -> Dictionary:
 	var validation := State.validate(candidate)
 	if not validation.is_empty():
 		return {"ok": false, "reason": validation}
 	if fail_writes:
 		return {"ok": false, "reason": "Save unavailable (simulated); value unchanged."}
-	# Never overwrite a malformed/newer existing save with a fresh profile.
-	if FileAccess.file_exists(path) and not load_state().ok:
+	# Compare against the currently visible store before touching either file.
+	# This rejects stale sequential commands, not independent browser IDBFS snapshots.
+	var current := load_state()
+	if not current.ok:
 		return {"ok": false, "reason": "Save unavailable: existing file preserved for recovery."}
-	var encoded := JSON.stringify(candidate)
+	var current_revision: int = current.state.revision
+	if expected_revision != current_revision:
+		return {"ok": false, "reason": "Save conflict: profile changed; reload before retrying."}
+	if current_revision >= State.MAX_REVISION:
+		return {"ok": false, "reason": "Save unavailable: profile revision exhausted."}
+	# A backup is data, never authority to rewind the live revision.
+	var committed := candidate.duplicate(true)
+	committed.revision = current_revision + 1
+	var encoded := JSON.stringify(committed)
 	var error := _write(path + ".tmp", encoded)
 	if error != OK:
 		return {"ok": false, "reason": "Save unavailable: temporary write failed (%s)." % error}
@@ -56,7 +67,7 @@ func save(candidate: Dictionary) -> Dictionary:
 	error = DirAccess.rename_absolute(path + ".tmp", path)
 	if error != OK:
 		return {"ok": false, "reason": "Save unavailable: replace failed (%s)." % error}
-	return {"ok": true, "reason": "Written — reload to verify persistence." if OS.has_feature("web") else "Saved locally."}
+	return {"ok": true, "state": committed, "reason": "Written — reload to verify persistence." if OS.has_feature("web") else "Saved locally."}
 
 func _write(target: String, text: String) -> Error:
 	var file := FileAccess.open(target, FileAccess.WRITE)

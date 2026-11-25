@@ -3,10 +3,11 @@ extends RefCounted
 const Content = preload("res://content.gd")
 const TimerState = preload("res://probe_timer.gd")
 const FORMAT := "little_rays.arch002-probe"
+const MAX_REVISION := 2147483647
 
 static func fresh() -> Dictionary:
 	return {"format": FORMAT, "schema_version": 1,
-		"content_version": Content.CONTENT_VERSION, "greetings": 0,
+		"content_version": Content.CONTENT_VERSION, "revision": 0, "greetings": 0,
 		"timer": TimerState.fresh(),
 		"individual": {"ray_id": "probe_ray_001", "breed_id": Content.BREED_ID,
 			"nickname": Content.DISPLAY_NAME}}
@@ -20,6 +21,12 @@ static func validate(value: Variant) -> String:
 		return "Unsupported probe content version; current save unchanged."
 	if value.get("individual") != fresh().individual:
 		return "Unrecognized probe individual; current save unchanged."
+	# Schema-1 fixtures without a revision are legacy revision zero.
+	var revision: Variant = value.get("revision", 0)
+	if not (revision is int or revision is float):
+		return "Profile revision must be an integer."
+	if not is_finite(float(revision)) or float(revision) != floor(float(revision)) or revision < 0 or revision > MAX_REVISION:
+		return "Invalid profile revision; current save unchanged."
 	var count: Variant = value.get("greetings")
 	if not (count is int or count is float):
 		return "Greeting count must be an integer."

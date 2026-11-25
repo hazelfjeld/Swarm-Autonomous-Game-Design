@@ -180,6 +180,9 @@ jobs:
                   ? c.getBoundingClientRect().toJSON() : null;
               """)
 
+          def same_payload(a, b):
+              return {k: v for k, v in a.items() if k != "revision"} == {k: v for k, v in b.items() if k != "revision"}
+
           def greeting_count(n):
               value = saved()
               if value and value.get("browser_error"):
@@ -218,12 +221,14 @@ jobs:
                   greet()
                   first = until(lambda: greeting_count(1), "first greeting persisted in IndexedDB")
                   assert first["individual"]["ray_id"] == "probe_ray_001"
+                  assert first["revision"] == 1
                   print("First greeting persisted.", flush=True)
                   api("POST", session + "/refresh", {})
                   until(canvas_ready, "Godot loader after reload")
                   greet()
                   second = until(lambda: greeting_count(2), "second greeting after reload")
                   assert second["individual"] == first["individual"]
+                  assert second["revision"] == first["revision"] + 1
                   # Exercise the real diagnostic job via its normal UI controls.
                   # Fixed viewport fixture; persisted state is the assertion,
                   # never the click itself. Do not inject clocks or save data.
@@ -335,13 +340,14 @@ jobs:
                   preview_backup()
                   keys("\ue007")  # Enter accepts the normal confirmation dialog.
                   restored = until(lambda: greeting_count(2), "confirmed backup restore persisted")
-                  assert restored == claimed, "Backup restore changed identity or timer"
+                  assert same_payload(restored, claimed), "Backup restore changed identity or timer"
+                  assert restored["revision"] == third["revision"] + 1, "Backup rewound revision"
                   assert until(lambda: saved("delivery_probe.json.previous") == third,
                                "previous-good copy retained after restore")
                   screenshot("03-restored")
                   api("POST", session + "/refresh", {})
                   until(canvas_ready, "loader after backup restore")
-                  assert until(lambda: greeting_count(2), "restored profile after reload") == claimed
+                  assert until(lambda: greeting_count(2), "restored profile after reload") == restored
 
                   # The backup textbox starts empty after reload. Type malformed
                   # JSON via real keyboard events; do not edit IndexedDB.
@@ -352,11 +358,11 @@ jobs:
                   screenshot("04-corrupt-preview")
                   keys("\ue007")
                   time.sleep(2)
-                  assert saved() == claimed, "Malformed import changed active profile"
+                  assert saved() == restored, "Malformed import changed active profile"
                   assert saved("delivery_probe.json.previous") == third, "Malformed import changed previous-good copy"
                   api("POST", session + "/refresh", {})
                   until(canvas_ready, "loader after malformed import")
-                  assert until(lambda: greeting_count(2), "unchanged profile after malformed import") == claimed
+                  assert until(lambda: greeting_count(2), "unchanged profile after malformed import") == restored
                   print(json.dumps({"browser_backup": "pass", "source_commit": manifest["source_commit"],
                       "observations": ["export UI", "preview nonmutation", "cancel nonmutation",
                                        "confirmed restore", "previous-good copy", "reload",
@@ -385,7 +391,7 @@ jobs:
 
                   before_failure = saved()
                   previous_before_failure = saved("delivery_probe.json.previous")
-                  assert before_failure == claimed
+                  assert before_failure == restored
                   assert previous_before_failure == third
                   toggle_save_failure()
                   screenshot("05-failure-enabled")
@@ -401,7 +407,8 @@ jobs:
                   # one greeting, not accumulate the rejected candidate.
                   greet()
                   retried = until(lambda: greeting_count(3), "greeting after disabling simulated failure")
-                  assert retried == third, "Successful retry did not preserve identity and timer"
+                  assert same_payload(retried, third), "Successful retry did not preserve identity and timer"
+                  assert retried["revision"] == before_failure["revision"] + 1
                   assert until(lambda: saved("delivery_probe.json.previous") == before_failure,
                                "previous-good copy after retry")
                   screenshot("08-retry-saved")

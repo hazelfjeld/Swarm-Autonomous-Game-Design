@@ -6,6 +6,7 @@ The test clock accelerates the breeding/hatch timers.
 from pathlib import Path
 import json
 import os
+import shutil
 from playwright.sync_api import sync_playwright
 
 HERE = Path(__file__).resolve().parent
@@ -110,7 +111,8 @@ def mobile_journey(browser):
 def main():
     check(INDEX.exists(), "Exact prototype HTML exists")
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        chrome = shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
+        browser = playwright.chromium.launch(headless=True, executable_path=chrome)
         try:
             desktop_journey(browser)
             mobile_journey(browser)

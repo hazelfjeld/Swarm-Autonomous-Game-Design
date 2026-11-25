@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "qa",
-  "run_id": "qa-20261125T0140Z-725858afa46ec",
-  "generation": 30,
-  "acquired_at": "2026-11-25T01:40:53.995Z",
-  "expires_at": "2026-11-25T02:10:53.995Z"
+  "run_id": "qa-20261125T0240Z-independent-revision-31",
+  "generation": 31,
+  "acquired_at": "2026-11-25T02:39:36.891Z",
+  "expires_at": "2026-11-25T03:09:36.891Z"
 }

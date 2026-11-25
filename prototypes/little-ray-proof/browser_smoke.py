@@ -1,13 +1,13 @@
 """Real Chromium click-path smoke for the isolated Little Ray demo.
 
 Automated browser evidence, NOT a human playtest or GDD acceptance.
-The test clock accelerates the breeding/hatch timers.
+The desktop journey uses ordinary real-time timers; no game-state mutation or debug render.
 """
 from pathlib import Path
 import json
 import os
 import shutil
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 HERE = Path(__file__).resolve().parent
 INDEX = HERE / "index.html"
@@ -25,34 +25,50 @@ def state(page):
     return page.evaluate("window.LittleRayDebug.getState()")
 
 
-def open_game(context):
+def open_game(context, errors=None):
     page = context.new_page()
-    page.add_init_script("""(() => {
-       const realNow = Date.now.bind(Date);
-       window.__littleRayTestNow = realNow();
-       Date.now = () => window.__littleRayTestNow;
-       window.advanceDemoClock = (seconds) => {
-           window.__littleRayTestNow += seconds * 1000;
-           window.LittleRayDebug.render();
-       };
-    })();""")
+    if errors is not None:
+        page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(INDEX.as_uri(), wait_until="load")
     check(page.locator("#heading").inner_text() == "The Sunlit Reef", "Island heading renders")
     return page
 
 
-def advance(page, seconds):
-    page.evaluate("(seconds) => window.advanceDemoClock(seconds)", seconds)
-
-
 def desktop_journey(browser):
     context = browser.new_context(viewport={"width": 1280, "height": 900})
-    page = open_game(context)
     errors = []
-    page.on("pageerror", lambda error: errors.append(str(error)))
+    page = open_game(context, errors)
     try:
         check(len(state(page)["rays"]) == 2, "Two starter rays")
+        collect = page.locator('#view [data-act="collect"]')
+        initial_gold = state(page)["gold"]
+        expect(collect).to_be_enabled(timeout=10000)
+        collect.click()
+        after_collect = state(page)["gold"]
+        check(after_collect > initial_gold, "Resident Gold accrues in real time and is collected by click")
+        initial_food = state(page)["food"]
+        for plot in (0, 1):
+            page.locator(f'#view [data-act="plant"][data-i="{plot}"]').click()
+        check(state(page)["gold"] == after_collect - 80, "Both plots charge their planting cost exactly once")
+        check(state(page)["food"] == initial_food, "Planting grants no premature Food")
+        expect(page.locator('#view [data-crop="0"]')).to_be_disabled()
+        # Reload a growing crop, not just the finished city. No clock injection.
+        deadlines = [crop["until"] for crop in state(page)["crops"]]
+        page.reload(wait_until="load")
+        check([crop["until"] for crop in state(page)["crops"]] == deadlines, "Both growing crop deadlines survive reload")
+        for plot in (0, 1):
+            harvest = page.locator(f'#view [data-act="harvest"][data-i="{plot}"]')
+            expect(harvest).to_be_enabled(timeout=20000)
+            harvest.click()
+        check(state(page)["food"] == initial_food + 130 and state(page)["crops"] == [None, None],
+              "Both crops mature on real timers and grant Food once")
         page.locator('#nav [data-view="rays"]').click()
+        feed = page.locator('#view [data-act="feed"][data-i="1"]')
+        feed.focus()
+        tick_before = state(page)["lastTick"]
+        page.wait_for_function("(before) => window.LittleRayDebug.getState().lastTick > before", arg=tick_before)
+        expect(feed).to_be_focused()
+        check(True, "Keyboard focus survives a real idle timer tick")
         for ray in (1, 2):
             for _ in range(2):
                 page.locator(f'#view [data-act="feed"][data-i="{ray}"]').click()
@@ -60,14 +76,26 @@ def desktop_journey(browser):
         page.locator('#nav [data-view="nursery"]').click()
         page.locator('#view [data-act="breed"]').click()
         check(state(page)["breed"]["kind"] == "pearlcloud", "First pairing commits Pearlcloud")
-        advance(page, 19)
-        page.locator('#view [data-act="transfer"]').click()
+        transfer = page.locator('#view [data-act="transfer"]')
+        expect(transfer).to_be_disabled()
+        expect(transfer).to_be_enabled(timeout=25000)
+        transfer.click()
         check(state(page)["hatch"]["kind"] == "pearlcloud", "Egg transferred to separate hatchery")
-        advance(page, 15)
-        page.locator('#view [data-act="claim"]').click()
+        claim = page.locator('#view [data-act="claim"]')
+        expect(claim).to_be_disabled()
+        expect(claim).to_be_enabled(timeout=20000)
+        claim.click()
         check(len(state(page)["rays"]) == 3, "Hatching grants exactly one ray")
+        page.locator('#nav [data-view="rays"]').click()
+        for _ in range(6):
+            page.locator('#view [data-act="feed"][data-i="3"]').click()
+        check(state(page)["rays"][2]["lv"] == 4, "Hatched Pearlcloud trained to level four through UI")
         page.locator('#nav [data-view="battle"]').click()
         page.locator('#view [data-act="startBattle"]').click()
+        enemy = page.locator('#view [data-act="target"][data-i="1"]')
+        enemy.focus()
+        enemy.press("Enter")
+        check(state(page)["battle"]["target"] == 1, "Keyboard selects a rival in 3v3 battle")
         for _ in range(20):
             if state(page)["battle"]["finished"]:
                 break
@@ -79,7 +107,8 @@ def desktop_journey(browser):
         before = state(page)
         page.reload(wait_until="load")
         after = state(page)
-        check(after["land"] == before["land"] and len(after["rays"]) == 3, "Island and rays persist across browser reload")
+        check(all(after[key] == before[key] for key in ("land", "rays", "gold", "food", "battles", "crops")),
+              "Island, individual levels, currencies, battle count and crops persist across browser reload")
         check(not errors, "No uncaught JavaScript errors")
         page.screenshot(path=str(OUT / "desktop.png"), full_page=True)
         print("DESKTOP_BROWSER_PASS", json.dumps({"rays": len(after["rays"]), "land": after["land"], "battles": after["battles"]}))
@@ -93,13 +122,15 @@ def desktop_journey(browser):
 
 def mobile_journey(browser):
     context = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, has_touch=True, is_mobile=True)
-    page = open_game(context)
+    errors = []
+    page = open_game(context, errors)
     try:
         page.locator('#view [data-act="plant"][data-i="0"]').tap()
         check(state(page)["crops"][0] is not None, "Touch planting works at mobile viewport")
         page.locator('#nav [data-view="rays"]').tap()
         check(page.locator('#view .raycard').count() == 2, "Mobile ray roster is visible")
         page.screenshot(path=str(OUT / "mobile.png"), full_page=True)
+        check(not errors, "No uncaught mobile JavaScript errors")
         print("MOBILE_BROWSER_PASS")
     except Exception:
         page.screenshot(path=str(OUT / "mobile-failure.png"), full_page=True)

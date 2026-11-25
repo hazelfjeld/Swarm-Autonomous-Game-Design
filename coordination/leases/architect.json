@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": "architect-20261125T081400Z-audio-g39",
+  "run_id": null,
   "generation": 39,
-  "acquired_at": "2026-11-25T08:14:00.000Z",
-  "expires_at": "2026-11-25T08:44:00.000Z"
+  "acquired_at": null,
+  "expires_at": null
 }

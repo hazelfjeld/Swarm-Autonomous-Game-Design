@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": "architect-20261125T0605Z-audio-touch-g37",
+  "run_id": null,
   "generation": 37,
-  "acquired_at": "2026-11-25T06:05:34.205Z",
-  "expires_at": "2026-11-25T06:35:34.205Z"
+  "acquired_at": null,
+  "expires_at": null
 }

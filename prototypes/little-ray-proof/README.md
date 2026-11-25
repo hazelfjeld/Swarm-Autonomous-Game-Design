@@ -12,7 +12,7 @@ The current tester journey:
 
 ### Tests
 
-Run `node test_logic.cjs` from this directory. It executes **10 deterministic state-machine smoke assertions**, including resource spending, crop harvest, feeding, one-time pairing, separate incubation, claim/reward idempotence, three-versus-three battle, expansion, and simulated save/reload. This is **not** a visual/browser test; the local Chromium runner returned `net::ERR_BLOCKED_BY_ADMINISTRATOR` on the file URL. The game has not been human-playtested and does not claim production-quality balance or visuals.
+Run `node test_logic.cjs` from this directory. It executes **11 named deterministic smoke checks plus the QA-FIX-001 overlap/reload regressions**, including resource spending, crop harvest, feeding, one-time pairing, separate incubation, claim/reward idempotence, three-versus-three battle, expansion, and simulated save/reload. The guided first Pearlcloud is consumed with the first paid pairing, not at hatch claim. A fixed RNG of 0.99 proves a second pairing while the first egg incubates commits an ordinary Sunbeam; the test also checks old in-flight saves, reload and duplicate debits/claims. This is **not** a visual/browser test; the local Chromium runner returned `net::ERR_BLOCKED_BY_ADMINISTRATOR` on the file URL. The game has not been human-playtested and does not claim production-quality balance or visuals.
 
 ### What this is not
 

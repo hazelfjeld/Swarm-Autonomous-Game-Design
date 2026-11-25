@@ -16,6 +16,7 @@ var plant_short: Button
 var plant_long: Button
 var harvest_button: Button
 var feed_button: Button
+var level_button: Button
 var name_edit: LineEdit
 var capture_mode: bool = false
 var build_choice: OptionButton
@@ -90,6 +91,11 @@ func _ready() -> void:
 	sample_button = button_at("Claim tutorial sample (+10 Gold)", Vector2(758, 246), func(): act("sample", ""))
 	collect_button = button_at("Collect resident Gold", Vector2(758, 294), func(): act("collect", selected_habitat))
 	feed_button = button_at("Feed Blueberry", Vector2(758, 342), func(): act("feed", selected_ray))
+	feed_button.size = Vector2(151, 44)
+	feed_button.add_theme_font_size_override("font_size", 16)
+	level_button = button_at("Level +1", Vector2(917, 342), func(): act("feed_level", selected_ray))
+	level_button.size = Vector2(151, 44)
+	level_button.add_theme_font_size_override("font_size", 15)
 	farm_choice = OptionButton.new()
 	farm_choice.position = Vector2(758, 398)
 	farm_choice.size = Vector2(310, 28)
@@ -475,7 +481,11 @@ func refresh() -> void:
 		upgrade_button.text = "Large · 600 G · 5m\nLv 5 · income pauses"
 	var cost: int = city.feed_cost(selected_ray)
 	feed_button.disabled = cost == 0 or city.food < cost
-	feed_button.text = "Feed · %d Food" % cost if cost > 0 else "Level cap reached"
+	feed_button.text = "Feed · %d Food" % cost if cost > 0 else "Level cap"
+	var next_cost: int = city.feed_level_cost(selected_ray)
+	level_button.disabled = next_cost <= 0 or city.food < next_cost
+	level_button.text = "Lv +1 · %d Food" % next_cost if next_cost > 0 else "Level cap"
+	level_button.tooltip_text = "Complete %d remaining feed pips for %d Food." % [4 - int(ray["pips"]), next_cost] if next_cost > 0 else "Maximum trainable level in this slice."
 	move_ray_button.disabled = ray["habitat_id"] == selected_habitat
 	buy_button.disabled = city.find_building("hatchery-1").is_empty() or not city.founder_egg.is_empty() or city.gold < 100
 	place_egg_button.disabled = city.founder_egg.is_empty() or city.founder_remaining() > 0
@@ -851,4 +861,18 @@ func capture_fixture(directory: String) -> void:
 		get_tree().quit(1)
 		return
 	print("CITY_SAFEGUARD_GUI_PASS: native store/restore and favorite clicks, sale preview without removal; modal canceled programmatically")
+	await get_tree().process_frame
+	var quote: int = city.feed_level_cost(selected_ray)
+	var prior_food: int = city.food
+	var prior_level: int = int(city.individuals[selected_ray]["level"])
+	if quote <= 0 or level_button.disabled or not level_button.text.contains(str(quote)):
+		push_error("GUI level-up quote missing")
+		get_tree().quit(1)
+		return
+	await click_fixture(level_button)
+	if city.food != prior_food - quote or int(city.individuals[selected_ray]["level"]) != prior_level + 1 or int(city.individuals[selected_ray]["pips"]) != 0:
+		push_error("GUI level-up did not settle exactly once")
+		get_tree().quit(1)
+		return
+	print("CITY_LEVEL_GUI_PASS: visible remaining-pip quote and native level-up action")
 	get_tree().quit(0)

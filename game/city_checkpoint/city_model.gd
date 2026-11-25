@@ -207,6 +207,13 @@ func feed_cost(ray_id: String = "ray-1") -> int:
 		return 0
 	return FEED_COSTS[current - 1]
 
+# Quote the exact remaining pips at this level, never a later level.
+func feed_level_cost(ray_id: String) -> int:
+	var cost: int = feed_cost(ray_id)
+	if cost == 0:
+		return 0
+	return cost * (4 - int(individuals[ray_id]["pips"]))
+
 func housing_error(species_id: String, habitat_id: String) -> String:
 	if not SPECIES.has(species_id):
 		return "Unknown species."
@@ -635,6 +642,16 @@ func command(kind: String, argument: String, op_id: String, expected_revision: i
 				message = "−%d Food · %s level %d! Gold rate increased." % [cost, ray["nickname"], ray["level"]]
 			else:
 				message = "−%d Food · feed pip %d/4" % [cost, ray["pips"]]
+		"feed_level":
+			var cost: int = feed_level_cost(argument)
+			if cost <= 0 or food < cost:
+				return {"ok": false, "message": "Unknown ray, level cap or insufficient Food for next level."}
+			var ray: Dictionary = individuals[argument]
+			# One debit, one level and one operation receipt; no partial spend.
+			food -= cost
+			ray["pips"] = 0
+			ray["level"] += 1
+			message = "−%d Food · %s level %d! Gold rate increased." % [cost, ray["nickname"], ray["level"]]
 		_:
 			return {"ok": false, "message": "Unknown command."}
 	if _settle_trained_founders():

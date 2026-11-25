@@ -280,5 +280,26 @@ func _initialize() -> void:
 	storage.advance(60000)
 	check(storage.habitat_bins["building-1"]["ticks"] == preserved_ticks and not storage.command("collect","building-1","stored-collect",storage.revision).ok, "stored habitat preserves fraction without production or collection")
 	check(storage.snapshot()["stored_buildings"].size() == 1 and storage.command("restore_building","building-1,3,0","restore-light",storage.revision).ok and storage.habitat_bins["building-1"]["ticks"] == preserved_ticks, "snapshot includes storage and restore retains bin")
+	# Bulk feed is a single revision/receipt and only completes the current level.
+	var bulk = Model.new()
+	check(bulk.feed_level_cost("ray-1") == 20, "fresh level quote is four pips")
+	bulk.command("feed", "ray-1", "one-pip", bulk.revision)
+	check(bulk.feed_level_cost("ray-1") == 15 and bulk.pips == 1, "partial pip lowers level quote")
+	var rev: int = bulk.revision
+	var balance: int = bulk.food
+	check(not bulk.command("feed_level", "ray-1", "stale-bulk", rev-1).ok and bulk.food == balance and bulk.pips == 1, "stale level action rejected")
+	check(bulk.command("feed_level", "ray-1", "bulk", rev).ok and bulk.food == balance-15 and bulk.level == 2 and bulk.pips == 0 and bulk.revision == rev+1, "remaining pips settle atomically")
+	check(bulk.command("feed_level", "ray-1", "bulk", rev).ok and bulk.level == 2 and bulk.food == balance-15, "bulk receipt retry cannot debit twice")
+	check(not bulk.command("feed", "ray-1", "bulk", bulk.revision).ok, "bulk operation ID cannot change payload")
+	bulk.food = 31
+	var before: Dictionary = bulk.snapshot()
+	check(bulk.feed_level_cost("ray-1") == 32 and not bulk.command("feed_level", "ray-1", "unaffordable-bulk", bulk.revision).ok and bulk.snapshot() == before, "insufficient Food leaves all state unchanged")
+	check(bulk.feed_level_cost("missing") == 0 and not bulk.command("feed_level", "missing", "missing-bulk", bulk.revision).ok, "unknown ray rejected")
+	var final_level = Model.new()
+	final_level.individuals["ray-1"]["level"] = 9
+	final_level.individuals["ray-1"]["pips"] = 3
+	final_level.food = 129
+	check(final_level.feed_level_cost("ray-1") == 129 and final_level.command("feed_level", "ray-1", "last-level", final_level.revision).ok and final_level.level == 10 and final_level.food == 0, "last legal level costs exact remaining pip")
+	check(final_level.feed_level_cost("ray-1") == 0 and not final_level.command("feed_level", "ray-1", "past-cap", final_level.revision).ok and final_level.level == 10, "bulk feeding cannot exceed level cap")
 	print("CITY_MODEL_CHECKS: %d / %d passed" % [checks-failures,checks])
 	quit(0 if failures == 0 else 1)

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 55,
-  "run_id": "mountain-mover-visible-land-20261125T2044Z",
-  "acquired_at": "2026-11-25T20:44:44.875Z",
-  "expires_at": "2026-11-25T21:14:44.875Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

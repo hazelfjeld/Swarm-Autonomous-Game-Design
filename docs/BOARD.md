@@ -9,7 +9,9 @@
 
 ## Little Ray current design
 
-Little Ray GDD **v2.0 is received**. Hazel requested the Dragon City / Monster Legends-style direction correction in [DIRECTOR-002 #22](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/22). Read the [full GDD](design/GDD.md), [source/archive record](design/SOURCE.md), [baseline](design/DESIGN_BASELINE.md), and [first-slice assignments](design/FIRST_SLICE.md). V1 originals and completed DIRECTOR-001 intake remain historical; conflicting sanctuary rules are superseded.
+- [DIRECTOR-003 — classic collector fidelity and unified cute manta identity](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/27): [creative-direction charter](design/CREATIVE_DIRECTION.md) and GDD v2.1 clarify visual/UI consistency without changing existing mechanical rules, issue statuses, prerequisites, or hourly schedules. The pixel-versus-cartoon treatment is still awaiting ART-002 evidence and Hazel's choice. This design task requires exact-head QA and architect review before any merge.
+
+Little Ray GDD **v2.1 is received** (v2.0 mechanics preserved; DIRECTOR-003 presentation clarification). Hazel requested the Dragon City / Monster Legends-style direction correction in [DIRECTOR-002 #22](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/22). Read the [full GDD](design/GDD.md), [source/archive record](design/SOURCE.md), [baseline](design/DESIGN_BASELINE.md), and [first-slice assignments](design/FIRST_SLICE.md). V1 originals and completed DIRECTOR-001 intake remain historical; conflicting sanctuary rules are superseded.
 
 The current loop is resident Gold, timed crops, Food feeding, random breeding, a separate hatchery, compatible elemental housing, three-versus-three adventure battles and island expansion. The corrected product has rarity/rank power and continuing collection/Arena progression.
 

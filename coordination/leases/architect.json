@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": "architect-20261125T1210Z-artbinding-g43-b82c",
+  "run_id": null,
   "generation": 43,
-  "acquired_at": "2026-11-25T12:09:38.463Z",
-  "expires_at": "2026-11-25T12:39:38.463Z"
+  "acquired_at": null,
+  "expires_at": null
 }

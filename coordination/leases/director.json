@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 41,
-  "run_id": "director-20261125T1040Z-artskill-binding-73af",
-  "acquired_at": "2026-11-25T10:38:45.624Z",
-  "expires_at": "2026-11-25T11:08:45.624Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "qa",
-  "run_id": "qa-20261125T2338Z-identity-recheck-7df2",
+  "run_id": null,
   "generation": 51,
-  "acquired_at": "2026-11-25T23:38:26.943Z",
-  "expires_at": "2026-11-26T00:08:26.943Z"
+  "acquired_at": null,
+  "expires_at": null
 }

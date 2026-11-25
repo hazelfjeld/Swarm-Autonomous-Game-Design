@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "director",
-  "generation": 50,
-  "run_id": null,
-  "acquired_at": null,
-  "expires_at": null
+  "run_id": "director-feedcap-20261125T1912Z",
+  "generation": 51,
+  "acquired_at": "2026-11-25T19:12:15Z",
+  "expires_at": "2026-11-25T19:42:15Z"
 }

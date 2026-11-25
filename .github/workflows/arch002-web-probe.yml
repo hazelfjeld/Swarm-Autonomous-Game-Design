@@ -224,13 +224,23 @@ jobs:
                   first = until(lambda: greeting_count(1), "first greeting persisted in IndexedDB")
                   assert first["individual"]["ray_id"] == "probe_ray_001"
                   assert first["revision"] == 1
-                  print("First greeting persisted.", flush=True)
+                  def confirmed(revision):
+                      return script("""
+                        const badge = document.getElementById('save-confirmation');
+                        return !badge.hidden && badge.dataset.state === 'saved' &&
+                            badge.dataset.revision === String(arguments[0]) &&
+                            badge.textContent === 'Saved revision ' + arguments[0];
+                      """, [revision])
+                  assert until(lambda: confirmed(first["revision"]), "first exact durable-save confirmation")
+                  print("First greeting persisted and confirmed.", flush=True)
                   api("POST", session + "/refresh", {})
                   until(canvas_ready, "Godot loader after reload")
                   greet()
                   second = until(lambda: greeting_count(2), "second greeting after reload")
                   assert second["individual"] == first["individual"]
                   assert second["revision"] == first["revision"] + 1
+                  assert until(lambda: confirmed(second["revision"]), "second exact durable-save confirmation")
+                  print(json.dumps({"durable_save_confirmation": "pass", "revision": second["revision"], "actual_site_verified": False}), flush=True)
                   # Exercise the real diagnostic job via its normal UI controls.
                   # Fixed viewport fixture; persisted state is the assertion,
                   # never the click itself. Do not inject clocks or save data.
@@ -625,6 +635,7 @@ jobs:
                   fault = until(storage_failure, "actual IndexedDB transaction abort", 20)
                   assert fault["state"] == "failed" and fault["writer"] is False, fault
                   assert fault["visible"] and "Save unavailable" in fault["message"], fault
+                  assert script("return document.getElementById('save-confirmation').hidden"), "Failed write left a positive save badge visible"
                   assert saved() == seventh, "Aborted browser transaction changed active save"
                   assert saved("delivery_probe.json.previous") == touched, "Aborted browser transaction changed recovery copy"
                   greet()  # Later actions must not persist while the document is faulted.

@@ -72,7 +72,12 @@ func save(candidate: Dictionary, expected_revision: int) -> Dictionary:
 	error = DirAccess.rename_absolute(path + ".tmp", path)
 	if error != OK:
 		return {"ok": false, "reason": "Save unavailable: replace failed (%s)." % error}
-	return {"ok": true, "state": committed, "reason": "Written — reload to verify persistence." if OS.has_feature("web") else "Saved locally."}
+	# FileAccess success is not a durable browser commit. Correlate the exact
+	# encoded active save with asynchronous IndexedDB readback in the shell.
+	if OS.has_feature("web"):
+		var browser = JavaScriptBridge.get_interface("window")
+		browser.littleRayProbeExpectSave(encoded)
+	return {"ok": true, "state": committed, "reason": "Local write complete; see browser save status." if OS.has_feature("web") else "Saved locally."}
 
 func _write(target: String, text: String) -> Error:
 	var file := FileAccess.open(target, FileAccess.WRITE)

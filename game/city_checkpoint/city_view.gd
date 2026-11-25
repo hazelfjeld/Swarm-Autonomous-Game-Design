@@ -8,6 +8,7 @@ var last_ms: int = 0
 var op_count: int = 0
 var status_label: Label
 var wallet: Label
+var goal_label: Label
 var ray_info: Label
 var farm_info: Label
 var collect_button: Button
@@ -80,6 +81,9 @@ func _ready() -> void:
 	last_ms = Time.get_ticks_msec()
 	label_at("LITTLE RAY   /   BLUEBERRY REEF", Vector2(28, 15), Vector2(650, 40), 27)
 	wallet = label_at("", Vector2(30, 66), Vector2(1040, 40), 23)
+	goal_label = label_at("", Vector2(650, 12), Vector2(418, 49), 16)
+	goal_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	goal_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	land_label = label_at("STARTER ISLAND  ·  4 owned sectors / 8 × 8", Vector2(30, 112), Vector2(650, 32), 18)
 	ray_title = label_at("BLUEBERRY  /  TIDE · COMMON", Vector2(758, 116), Vector2(320, 30), 20)
 	ray_info = label_at("", Vector2(758, 148), Vector2(320, 50), 16)
@@ -540,7 +544,53 @@ func refresh_founder_controls() -> void:
 			return
 	egg_info.text = "%s ready · No free %s housing. Build, upgrade or move a resident." % [egg_name, elements]
 
+# Read-only onboarding guidance from committed city state; no new rewards,
+# progression gates, forced actions or breeding behavior are introduced.
+func next_city_goal() -> String:
+	if not city.sample_claimed:
+		return "Claim the tutorial sample (+10 Gold, +100 XP)."
+	if not city.founder_placed_milestone:
+		if city.find_building("hatchery-1").is_empty():
+			return "Restore the hatchery from storage."
+		if city.founder_egg.is_empty():
+			return "Buy Sunbeam's 100-Gold egg." if city.gold >= 100 else "Collect habitat Gold for Sunbeam's egg."
+		var species_id: String = str(city.founder_egg["species"])
+		var egg_name: String = str(Model.SPECIES[species_id]["name"])
+		var compatible: bool = false
+		for habitat_id in city.habitat_ids():
+			if city.housing_error(species_id, habitat_id).is_empty():
+				compatible = true
+				break
+		if not compatible:
+			var elements: String = " or ".join(PackedStringArray(Model.SPECIES[species_id]["elements"]))
+			return "Prepare %s housing with a free slot." % elements
+		if city.founder_remaining() > 0:
+			return "%s incubating · %ds remaining." % [egg_name, city.founder_remaining()]
+		return "Select compatible housing and place %s." % egg_name
+	if not city.trained_founders_milestone:
+		for species_id in ["blueberry", "sunbeam"]:
+			var best_id: String = ""
+			for ray_id in city.individuals:
+				var ray: Dictionary = city.individuals[ray_id]
+				if ray["species"] != species_id:
+					continue
+				if best_id.is_empty() or int(ray["level"]) > int(city.individuals[best_id]["level"]):
+					best_id = str(ray_id)
+			var species_name: String = str(Model.SPECIES[species_id]["name"])
+			if best_id.is_empty():
+				return "Acquire another %s founder." % species_name
+			if int(city.individuals[best_id]["level"]) < 4:
+				if city.food < city.feed_level_cost(best_id):
+					return "Grow Food to train %s to Lv 4." % species_name
+				return "Train %s to Lv 4." % species_name
+		for building in city.buildings:
+			if building["type"] == "grotto" and city.pending(str(building["id"])):
+				return "Wait for the breeding grotto to finish."
+		return "Build or restore the breeding grotto."
+	return "City tutorial ready · breeding is not yet wired."
+
 func refresh() -> void:
+	goal_label.text = "NEXT · " + next_city_goal()
 	wallet.text = "GOLD  %d     ·     FOOD  %d     ·     ACCOUNT LV %d  (%d XP)" % [city.gold, city.food, city.account_level(), city.xp]
 	refresh_roster()
 	var ray: Dictionary = city.individuals[selected_ray]
@@ -773,6 +823,11 @@ func capture_fixture(directory: String) -> void:
 	if get_viewport().get_texture().get_image().save_png(directory + "/01-opening.png") != OK:
 		get_tree().quit(1)
 		return
+	var initial_state: Dictionary = city.snapshot()
+	if not goal_label.text.contains("Claim the tutorial sample") or next_city_goal() != "Claim the tutorial sample (+10 Gold, +100 XP)." or city.snapshot() != initial_state:
+		push_error("Opening goal missing or mutated city state")
+		get_tree().quit(1)
+		return
 	var opening_book: String = collection_text()
 	if not opening_book.contains("1 of 6 species discovered · 1 rays owned") or not opening_book.contains("Undiscovered · Owned: 0 · Tide × Light · breeding not yet available"):
 		push_error("Opening collection projection incorrect")
@@ -788,6 +843,10 @@ func capture_fixture(directory: String) -> void:
 	shop_choice.select(0)
 	refresh()
 	await click_fixture(sample_button)
+	if not goal_label.text.contains("Buy Sunbeam"):
+		push_error("Goal did not advance after sample claim")
+		get_tree().quit(1)
+		return
 	await click_fixture(plant_short)
 	await click_fixture(feed_button)
 	if city.gold != 1190 or city.food != 235 or city.xp != 100 or city.crop.is_empty() or city.pips != 1:
@@ -851,7 +910,15 @@ func capture_fixture(directory: String) -> void:
 		push_error("GUI founder purchase failed")
 		get_tree().quit(1)
 		return
+	if not goal_label.text.contains("Sunbeam incubating"):
+		push_error("Goal did not identify active founder incubation")
+		get_tree().quit(1)
+		return
 	await get_tree().create_timer(31.0).timeout
+	if not goal_label.text.contains("place Sunbeam"):
+		push_error("Goal did not identify ready founder")
+		get_tree().quit(1)
+		return
 	# The starter Tide habitat cannot house a Light founder. A native click
 	# on the disabled button must leave the ready egg and wallet untouched.
 	habitat_choice.select(0)
@@ -996,4 +1063,9 @@ func capture_fixture(directory: String) -> void:
 		return
 	collection_dialog.hide()
 	print("CITY_COLLECTION_GUI_PASS: native Collection Book open, six catalog records, discovered/owned distinctions, source hints and no wallet mutation")
+	if not goal_label.text.contains("Lv 4"):
+		push_error("Goal did not advance to founder training")
+		get_tree().quit(1)
+		return
+	print("CITY_GOAL_GUI_PASS: read-only opening goal, sample, incubation, ready placement and training guidance")
 	get_tree().quit(0)

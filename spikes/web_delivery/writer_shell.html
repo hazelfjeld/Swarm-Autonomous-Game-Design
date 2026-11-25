@@ -9,6 +9,8 @@
     canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
     canvas[hidden], button[hidden] { display: none; }
     #status { position: fixed; inset: 0; display: grid; place-content: center; padding: 24px; text-align: center; gap: 16px; background: #091a29; }
+    #storage-warning { position: fixed; z-index: 10; top: 0; left: 0; right: 0; padding: 8px 12px; background: #581c1c; color: #fff; text-align: center; pointer-events: none; }
+    #storage-warning[hidden] { display: none; }
     #writer-retry { padding: 12px; font: inherit; cursor: pointer; }
   </style>
   $GODOT_HEAD_INCLUDE
@@ -19,6 +21,7 @@
     <div id="writer-message" role="status" aria-live="polite">Checking local profile ownership…</div>
     <button id="writer-retry" type="button" hidden>Take over after closing the other tab</button>
   </div>
+  <div id="storage-warning" role="alert" hidden></div>
   <script src="$GODOT_URL"></script>
   <script>
     // Acquire before Engine initialization: a waiting tab has no mounted IDBFS
@@ -30,6 +33,30 @@
     const canvas = document.getElementById("canvas");
     let attempted = false;
     window.littleRayProbeWriter = false;
+
+    // IDBFS writes asynchronously, after the GDScript file write returns.
+    // A browser abort is a real failed persistence transaction, not a
+    // successful save. Keep the lock and stop new game writes until reload.
+    // This observes FILE_DATA transactions in this single-threaded probe;
+    // it is not a positive durability acknowledgement.
+    function storageFailed() {
+      window.littleRayProbeWriter = false;
+      document.body.dataset.storageState = "failed";
+      const warning = document.getElementById("storage-warning");
+      warning.textContent = "Save unavailable: browser storage write failed. Recent changes may be lost. Copy a backup if needed; reload to recover.";
+      warning.hidden = false;
+    }
+
+    function observeStorageWrites() {
+      const transaction = IDBDatabase.prototype.transaction;
+      IDBDatabase.prototype.transaction = function(...args) {
+        const tx = Reflect.apply(transaction, this, args);
+        if (tx.mode === "readwrite" && tx.objectStoreNames.contains("FILE_DATA")) {
+          tx.addEventListener("abort", storageFailed, {once: true});
+        }
+        return tx;
+      };
+    }
 
     function show(state, text, canRetry = false) {
       document.body.dataset.writerState = state;
@@ -43,8 +70,8 @@
       attempted = true;
       show("checking", "Checking local profile ownership…");
       try {
-        if (!window.isSecureContext || !navigator.locks) {
-          show("unavailable", "Save unavailable: exclusive browser ownership is unsupported here.");
+        if (!window.isSecureContext || !navigator.locks || typeof IDBDatabase === "undefined") {
+          show("unavailable", "Save unavailable: exclusive browser ownership or storage is unsupported here.");
           return;
         }
         await navigator.locks.request(lockName, {mode: "exclusive", ifAvailable: true}, async lock => {
@@ -57,6 +84,7 @@
           show("starting", "Loading current profile…");
           canvas.hidden = false;
           try {
+            observeStorageWrites();
             const engine = new Engine($GODOT_CONFIG);
             await engine.startGame({canvas});
             document.body.dataset.writerState = "writer";

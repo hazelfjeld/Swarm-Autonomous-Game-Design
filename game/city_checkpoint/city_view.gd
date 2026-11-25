@@ -513,14 +513,18 @@ func refresh_founder_controls() -> void:
 	buy_button.disabled = not buy_reason.is_empty()
 	buy_button.text = buy_reason if buy_button.disabled else "Buy founder egg"
 	buy_button.tooltip_text = buy_reason
-	place_egg_button.disabled = true
-	place_egg_button.tooltip_text = ""
+	# Apply only the final availability state on each frame. Toggling a ready
+	# button disabled then enabled cancels an in-flight mouse press.
 	if city.founder_egg.is_empty():
+		place_egg_button.disabled = true
+		place_egg_button.tooltip_text = ""
 		egg_info.text = "Restore hatchery from storage" if city.find_building("hatchery-1").is_empty() else "Hatchery empty · buy a founder"
 		return
 	var species_id: String = str(city.founder_egg["species"])
 	var egg_name: String = str(Model.SPECIES[species_id]["name"])
 	if city.founder_remaining() > 0:
+		place_egg_button.disabled = true
+		place_egg_button.tooltip_text = ""
 		egg_info.text = "%s · %ds to hatch" % [egg_name, city.founder_remaining()]
 		return
 	var error: String = city.housing_error(species_id, selected_habitat)

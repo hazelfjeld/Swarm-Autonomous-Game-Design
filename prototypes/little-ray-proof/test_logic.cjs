@@ -45,3 +45,17 @@ memory.set('little-ray-proof-v01',JSON.stringify(saved));reload();
 assert.equal(state().firstPearl,true);assert.equal(state().hatch.kind,'pearlcloud');
 api.action('breed');assert.equal(state().breed.kind,'sunbeam');
 console.log(JSON.stringify({pass:true,regressions:['invalid start does not consume entitlement','paid first job consumes entitlement once','reload preserves committed first egg','overlapping second job uses ordinary fixed RNG','reload preserves both separate jobs','duplicate debit and claim rejected','legacy in-flight egg consumes entitlement on load']},null,2));
+
+
+// Feeding at the opening level-ten cap must never consume Food or hidden XP.
+memory.clear();run=start();api=run.debug;
+api.action('plant',0);api.action('plant',1);elapsed(13);
+api.action('harvest',0);api.action('harvest',1);
+for(let k=0;k<14;k++)api.action('feed',1);
+assert.equal(state().rays[0].lv,10);
+assert.equal(state().rays[0].xp,0);
+const foodAtCap=state().food;
+api.action('feed',1);
+assert.equal(state().food,foodAtCap);
+assert.equal(state().rays[0].xp,0);
+console.log(JSON.stringify({pass:true,regressions:['feeding a capped level-ten ray is a no-op with no Food cost or XP change']},null,2));

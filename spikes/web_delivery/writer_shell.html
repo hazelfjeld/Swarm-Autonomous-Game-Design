@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>$GODOT_PROJECT_NAME</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #091a29; color: #eef6ff; font: 16px system-ui, sans-serif; }
+    canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+    canvas[hidden], button[hidden] { display: none; }
+    #status { position: fixed; inset: 0; display: grid; place-content: center; padding: 24px; text-align: center; gap: 16px; background: #091a29; }
+    #writer-retry { padding: 12px; font: inherit; cursor: pointer; }
+  </style>
+  $GODOT_HEAD_INCLUDE
+</head>
+<body>
+  <canvas id="canvas" tabindex="0" hidden></canvas>
+  <div id="status">
+    <div id="writer-message" role="status" aria-live="polite">Checking local profile ownership…</div>
+    <button id="writer-retry" type="button" hidden>Take over after closing the other tab</button>
+  </div>
+  <script src="$GODOT_URL"></script>
+  <script>
+    // Acquire before Engine initialization: a waiting tab has no mounted IDBFS
+    // snapshot that could later overwrite the active writer's progress.
+    // Never steal a lock or release it while this engine instance can run.
+    const lockName = "little-ray-arch002-probe-writer-v1";
+    const message = document.getElementById("writer-message");
+    const retry = document.getElementById("writer-retry");
+    const canvas = document.getElementById("canvas");
+    let attempted = false;
+    window.littleRayProbeWriter = false;
+
+    function show(state, text, canRetry = false) {
+      document.body.dataset.writerState = state;
+      message.textContent = text;
+      retry.hidden = !canRetry;
+      retry.disabled = false;
+    }
+
+    async function acquire() {
+      if (attempted) return;
+      attempted = true;
+      show("checking", "Checking local profile ownership…");
+      try {
+        if (!window.isSecureContext || !navigator.locks) {
+          show("unavailable", "Save unavailable: exclusive browser ownership is unsupported here.");
+          return;
+        }
+        await navigator.locks.request(lockName, {mode: "exclusive", ifAvailable: true}, async lock => {
+          if (!lock) {
+            attempted = false;
+            show("busy", "Read-only: another tab owns this profile. Close that tab, then explicitly take over.", true);
+            return;
+          }
+          window.littleRayProbeWriter = true;
+          show("starting", "Loading current profile…");
+          canvas.hidden = false;
+          try {
+            const engine = new Engine($GODOT_CONFIG);
+            await engine.startGame({canvas});
+            document.body.dataset.writerState = "writer";
+            document.getElementById("status").remove();
+            canvas.focus();
+          } catch (error) {
+            window.littleRayProbeWriter = false;
+            canvas.hidden = true;
+            show("failed", "Runtime unavailable. Reload to retry safely.");
+            console.error(error);
+          }
+          // The browser releases this document's lock on destruction.
+          // No automatic takeover, no timeout, no unsafe lock stealing.
+          await new Promise(() => {});
+        });
+      } catch (error) {
+        window.littleRayProbeWriter = false;
+        show("unavailable", "Save unavailable: browser ownership could not be acquired.");
+        console.error(error);
+      }
+    }
+    retry.addEventListener("click", acquire);
+    window.addEventListener("pagehide", () => { window.littleRayProbeWriter = false; });
+    window.addEventListener("pageshow", event => {
+      if (event.persisted) location.reload(); // never resume a cached writer snapshot
+    });
+    acquire();
+  </script>
+</body>
+</html>

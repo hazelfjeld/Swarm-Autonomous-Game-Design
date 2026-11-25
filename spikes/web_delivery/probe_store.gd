@@ -36,6 +36,11 @@ func load_state() -> Dictionary:
 	return result
 
 func save(candidate: Dictionary, expected_revision: int) -> Dictionary:
+	# Fail closed if an export bypasses the ownership-aware shell or is suspended.
+	if OS.has_feature("web"):
+		var browser = JavaScriptBridge.get_interface("window")
+		if browser == null or browser.littleRayProbeWriter != true:
+			return {"ok": false, "reason": "Save unavailable: this tab does not own writes."}
 	var validation := State.validate(candidate)
 	if not validation.is_empty():
 		return {"ok": false, "reason": validation}

@@ -423,6 +423,49 @@ jobs:
                                        "reload after successful retry"],
                       "visual_status_review_required": True, "real_browser_storage_fault_verified": False,
                       "actual_site_verified": False}), flush=True)
+                  # Verify two real documents in the same browser profile.
+                  owner = api("GET", session + "/window")
+                  other = api("POST", session + "/window/new", {"type": "tab"})["handle"]
+                  def switch(handle):
+                      api("POST", session + "/window", {"handle": handle})
+                      api("POST", session + "/goog/cdp/execute", {"cmd": "Emulation.setDeviceMetricsOverride",
+                          "params": {"width": 720, "height": 820, "deviceScaleFactor": 1, "mobile": False}})
+                  def writer_state():
+                      return script("return document.body.dataset.writerState")
+                  def retry_writer():
+                      el = api("POST", session + "/element",
+                               {"using": "css selector", "value": "#writer-retry"})
+                      key = el["element-6066-11e4-a52e-4f735466cecf"]
+                      api("POST", session + "/element/" + key + "/click", {})
+                  switch(other)
+                  api("POST", session + "/url", {"url": url})
+                  until(lambda: writer_state() == "busy", "second tab read-only")
+                  assert not canvas_ready() and script("return window.littleRayProbeWriter") is False
+                  assert saved() == retried
+                  retry_writer()
+                  until(lambda: writer_state() == "busy", "takeover refused while owner lives")
+                  assert not canvas_ready() and saved() == retried
+                  switch(owner)
+                  assert writer_state() == "writer"
+                  greet()
+                  fourth = until(lambda: greeting_count(4), "original writer persists after refused takeover")
+                  assert fourth["revision"] == retried["revision"] + 1
+                  assert until(lambda: saved("delivery_probe.json.previous") == retried, "old writer recovery copy")
+                  api("DELETE", session + "/window")
+                  switch(other)
+                  assert writer_state() == "busy" and not canvas_ready(), "automatic takeover is forbidden"
+                  retry_writer()
+                  until(canvas_ready, "explicit takeover starts fresh engine")
+                  assert writer_state() == "writer"
+                  greet()
+                  fifth = until(lambda: greeting_count(5), "new writer preserves latest progress")
+                  assert fifth["revision"] == fourth["revision"] + 1
+                  assert fifth["individual"] == fourth["individual"] and fifth["timer"] == fourth["timer"]
+                  assert until(lambda: saved("delivery_probe.json.previous") == fourth, "new writer recovery copy")
+                  print(json.dumps({"browser_writer_ownership": "pass", "source_commit": manifest["source_commit"],
+                      "observations": ["second tab denied engine mount", "live-owner takeover refused",
+                                       "old owner persisted progress", "explicit takeover after close",
+                                       "new writer loads latest revision"], "actual_site_verified": False}), flush=True)
                   print(json.dumps({"browser_smoke": "pass", "source_commit": manifest["source_commit"],
                       "browser": opened["capabilities"].get("browserVersion"),
                       "observations": ["loader completion", "mouse greeting", "IndexedDB persistence",

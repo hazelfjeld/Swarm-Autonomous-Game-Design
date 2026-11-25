@@ -30,7 +30,7 @@ func _ready() -> void:
 	box.add_theme_constant_override("separation", 12)
 	scroll.add_child(box)
 	_label(box, "Little Ray · delivery probe", 28)
-	_label(box, "A disposable runtime test. Use one tab; this is not your game save.", 16)
+	_label(box, "A disposable runtime test. One writer; this is not your game save.", 16)
 	var ray := Ray.new()
 	ray.custom_minimum_size = Vector2(320, 180)
 	box.add_child(ray)

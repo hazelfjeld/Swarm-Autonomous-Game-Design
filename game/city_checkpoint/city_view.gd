@@ -1398,4 +1398,126 @@ func capture_fixture(directory: String) -> void:
 		get_tree().quit(1)
 		return
 	print("CITY_TIMER_CAPTURE_PASS: rejected pre-deadline action, successful cancel refund, rejected post-deadline cancel captures one completion, next frame no duplicate")
+	if not profile_view_fixture():
+		push_error("Acknowledged profile view fixture failed")
+		get_tree().quit(1)
+		return
+	print("CITY_PROFILE_VIEW_PASS: startup hidden until acknowledgement, restored operation ID, no speculative feed or overlap, retained pending elapsed, uncertain save freezes confirmed view")
 	get_tree().quit(0)
+
+# CI-only interface double: actual city model, controlled acknowledgement.
+# This verifies the view contract, not browser storage or the architect's port.
+class ProfileViewFixture:
+	extends RefCounted
+	const FixtureModel = preload("res://city_model.gd")
+	var phase: String = "opening"
+	var visible: Dictionary = {}
+	var pending: Dictionary = {}
+	var result: Dictionary = {}
+	var pending_result: Dictionary = {}
+	var allow_ack: bool = false
+	var command_count: int = 0
+	var elapsed_sample: int = 0
+
+	func status() -> String:
+		return phase
+
+	func snapshot() -> Dictionary:
+		return visible.duplicate(true)
+
+	func last_result() -> Dictionary:
+		return result.duplicate(true)
+
+	func poll(_wall_ms: int) -> bool:
+		if not allow_ack:
+			return false
+		allow_ack = false
+		if phase == "opening":
+			phase = "saving"
+			return true
+		if phase != "saving":
+			return false
+		visible = pending.duplicate(true)
+		result = pending_result.duplicate(true)
+		phase = "ready"
+		return true
+
+	func stage_command(kind: String, argument: String, op_id: String, revision: int, elapsed_ms: int, _wall_ms: int) -> bool:
+		if phase != "ready":
+			return false
+		var candidate = FixtureModel.new()
+		if not candidate.restore_snapshot(visible):
+			return false
+		var prior: int = candidate.revision
+		candidate.advance(elapsed_ms)
+		pending_result = candidate.command(kind, argument, op_id, candidate.revision if revision == prior else revision)
+		pending = candidate.snapshot()
+		command_count += 1
+		elapsed_sample = elapsed_ms
+		phase = "saving"
+		return true
+
+	func stage_tick(elapsed_ms: int, _wall_ms: int) -> bool:
+		if phase != "ready":
+			return false
+		var candidate = FixtureModel.new()
+		if not candidate.restore_snapshot(visible):
+			return false
+		candidate.advance(elapsed_ms)
+		pending = candidate.snapshot()
+		pending_result = {"ok": true, "message": "City checkpoint saved."}
+		elapsed_sample = elapsed_ms
+		phase = "saving"
+		return true
+
+func profile_view_fixture() -> bool:
+	var seed = Model.new()
+	var seeded: Dictionary = seed.command("sample", "", "ui-1000", seed.revision)
+	if not seeded["ok"]:
+		return false
+	var session := ProfileViewFixture.new()
+	session.pending = seed.snapshot()
+	session.pending_result = {"ok": true, "message": "City loaded."}
+	var view = get_script().new()
+	view.size = size
+	if not view.configure_profile_session(session):
+		view.free()
+		return false
+	add_child(view)
+	view.set_process(false)
+	var wall: int = int(Time.get_unix_time_from_system() * 1000.0)
+	var now: int = Time.get_ticks_msec()
+	var good: bool = view.profile_overlay.visible and not view.profile_confirmed
+	view.act("feed", "ray-1")
+	good = good and session.command_count == 0
+	session.allow_ack = true
+	view.process_profile(now, wall)
+	good = good and session.phase == "saving" and view.profile_overlay.visible and not view.profile_confirmed
+	session.allow_ack = true
+	view.process_profile(now + 1, wall + 1)
+	good = good and view.profile_confirmed and not view.profile_overlay.visible and view.city.snapshot() == seed.snapshot()
+	var before: Dictionary = view.city.snapshot()
+	var cost: int = view.city.feed_cost("ray-1")
+	var food_before: int = view.city.food
+	view.act("feed", "ray-1")
+	var staged_at: int = view.last_ms
+	good = good and session.phase == "saving" and view.city.snapshot() == before and view.profile_footer.text.begins_with("Saving")
+	view.act("feed", "ray-1")
+	good = good and session.command_count == 1 and view.city.snapshot() == before
+	view.process_profile(staged_at + 500, wall + 500)
+	good = good and view.last_ms == staged_at and view.city.snapshot() == before
+	session.allow_ack = true
+	view.process_profile(staged_at + 1100, wall + 1100)
+	good = good and view.city.food == food_before - cost and view.city.receipts.has("ui-1001") and view.profile_footer.text.begins_with("Saved")
+	var acknowledged: Dictionary = view.city.snapshot()
+	view.process_profile(staged_at + 1100, wall + 1100)
+	good = good and session.phase == "saving" and session.elapsed_sample == 1100 and view.city.snapshot() == acknowledged
+	# An uncertain write must retain the old acknowledged model and prevent
+	# additional commands. The standalone memory adapter must remain unused.
+	session.phase = "unavailable"
+	session.result = {"ok": false, "message": "Save unavailable. Reload to reconcile."}
+	view.process_profile(staged_at + 1200, wall + 1200)
+	view.act("feed", "ray-1")
+	good = good and view.profile_overlay.visible and view.city.snapshot() == acknowledged and session.command_count == 1 and view.adapter.last_snapshot.is_empty()
+	view.free()
+	return good

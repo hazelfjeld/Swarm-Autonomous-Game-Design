@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": "architect-20261126-g62-bridge-verification",
+  "run_id": null,
   "generation": 62,
-  "acquired_at": "2026-11-26T08:06:48.671Z",
-  "expires_at": "2026-11-26T08:36:48.671Z"
+  "acquired_at": null,
+  "expires_at": null
 }

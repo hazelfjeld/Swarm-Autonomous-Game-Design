@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": "architect-20261126T1206Z-g66-key-presence-8fa2",
+  "run_id": null,
   "generation": 66,
-  "acquired_at": "2026-11-26T12:06:30.442Z",
-  "expires_at": "2026-11-26T12:36:30.442Z"
+  "acquired_at": null,
+  "expires_at": null
 }

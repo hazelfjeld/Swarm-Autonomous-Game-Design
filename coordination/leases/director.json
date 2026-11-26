@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "director",
-  "generation": 67,
-  "run_id": null,
-  "acquired_at": null,
-  "expires_at": null
+  "generation": 68,
+  "run_id": "mountain-mover-20261126T0350Z-map-marker",
+  "acquired_at": "2026-11-26T03:51:56.302Z",
+  "expires_at": "2026-11-26T04:21:56.302Z"
 }

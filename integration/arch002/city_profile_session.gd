@@ -171,3 +171,43 @@ func stage_tick(elapsed_ms: int, observed_wall_ms: int) -> bool:
 		return false
 	city.advance(elapsed_ms)
 	return _stage(city.snapshot(), maxi(int(committed.wall_marker_ms), observed_wall_ms), {"ok": true, "message": "City checkpoint saved."})
+
+## Portable data only, deliberately independent of local storage generation.
+## Export a confirmed profile, never a pending or uncertain transaction.
+const BACKUP_FORMAT := "little-ray-city-backup"
+const BACKUP_VERSION := 1
+const MAX_BACKUP_BYTES := 1048576
+
+func export_backup() -> String:
+	if _status != "ready":
+		return ""
+	var confirmed: Dictionary = _boundary.committed()
+	var encoded := JSON.stringify({"format": BACKUP_FORMAT, "version": BACKUP_VERSION,
+		"wall_marker_ms": confirmed.wall_marker_ms, "model": confirmed.model}, "", true, true)
+	if encoded.to_utf8_buffer().size() > MAX_BACKUP_BYTES:
+		return ""
+	return encoded
+
+## Read-only preview. Do not pass the backup directly to the normal write
+## path: explicit replacement must reconcile local generations and preserve
+## the previous-good recovery copy in its own transaction.
+func preview_backup(encoded: String) -> Dictionary:
+	if encoded.is_empty() or encoded.to_utf8_buffer().size() > MAX_BACKUP_BYTES:
+		return {"ok": false, "reason": "Backup empty or too large."}
+	var parser := JSON.new()
+	if parser.parse(encoded) != OK:
+		return {"ok": false, "reason": "Backup is not valid JSON."}
+	var raw: Variant = parser.data
+	if not raw is Dictionary or raw.size() != 4 or not raw.has_all(["format", "version", "wall_marker_ms", "model"]):
+		return {"ok": false, "reason": "Unrecognized backup format."}
+	if raw.format != BACKUP_FORMAT or not Commit._whole(raw.version) or int(raw.version) != BACKUP_VERSION:
+		return {"ok": false, "reason": "Unsupported backup version."}
+	if not Commit._whole(raw.wall_marker_ms):
+		return {"ok": false, "reason": "Invalid backup time marker."}
+	var candidate = City.new()
+	if not raw.model is Dictionary or not candidate.restore_snapshot(raw.model):
+		return {"ok": false, "reason": "Invalid or unsupported city data."}
+	var normalized: Dictionary = candidate.snapshot()
+	return {"ok": true, "gold": normalized.gold, "food": normalized.food, "xp": normalized.xp,
+		"individual_count": normalized.individuals.size(), "domain_revision": normalized.revision,
+		"wall_marker_ms": int(raw.wall_marker_ms)}

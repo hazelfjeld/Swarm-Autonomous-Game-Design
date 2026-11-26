@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "gameplay",
-  "run_id": "gameplay-20261126072315240-g57-bridge-check",
+  "run_id": null,
   "generation": 57,
-  "acquired_at": "2026-11-26T07:23:15.240Z",
-  "expires_at": "2026-11-26T07:53:15.240Z"
+  "acquired_at": null,
+  "expires_at": null
 }

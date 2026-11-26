@@ -11,6 +11,17 @@ const GOLD_MARKER_OFFSET := Vector2(41, -33)
 const GOLD_MARKER_RADIUS: float = 14.0
 var city = Model.new()
 var adapter = Adapter.new()
+# Optional architect-owned session, injected before this view enters the tree.
+# The standalone developer scene remains explicitly memory-only.
+var profile_session: Variant = null
+var profile_confirmed: bool = false
+var profile_view_invalid: bool = false
+var profile_footer: Label
+var profile_overlay: ColorRect
+var profile_overlay_text: Label
+var profile_pending_kind: String = ""
+var profile_pending_placement: Vector2i = Vector2i.ZERO
+const PROFILE_TICK_MS: int = 1000
 var last_ms: int = 0
 var op_count: int = 0
 var status_label: Label
@@ -84,6 +95,14 @@ func button_at(value: String, position_: Vector2, action: Callable) -> Button:
 	add_child(item)
 	return item
 
+## The integration root starts the session (web or native test port) before
+## adding the scene. Never silently fall back from an attached failed session.
+func configure_profile_session(session: Variant) -> bool:
+	if is_inside_tree() or session == null or profile_session != null:
+		return false
+	profile_session = session
+	return true
+
 func _ready() -> void:
 	last_ms = Time.get_ticks_msec()
 	label_at("LITTLE RAY   /   BLUEBERRY REEF", Vector2(28, 15), Vector2(650, 40), 27)
@@ -141,7 +160,7 @@ func _ready() -> void:
 	cancel_preview_button.disabled = true
 	status_label = label_at("Tap a habitat or farm to collect; switch map mode to choose a placement.", Vector2(30, 617), Vector2(700, 34), 16)
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	label_at("DEV CHECKPOINT · Session only; random breeding, battle and production art not yet wired.", Vector2(30, 655), Vector2(1040, 22), 15)
+	profile_footer = label_at("DEV CHECKPOINT · Session only; random breeding, battle and production art not yet wired.", Vector2(30, 655), Vector2(1040, 22), 15)
 	ray_choice = option_at(Vector2(30, 685), Vector2(275, 44))
 	ray_choice.item_selected.connect(choose_ray)
 	habitat_choice = option_at(Vector2(315, 685), Vector2(275, 44))
@@ -183,10 +202,14 @@ func _ready() -> void:
 	sale_dialog.ok_button_text = "Sell this ray"
 	sale_dialog.confirmed.connect(confirm_sale)
 	add_child(sale_dialog)
-	adapter.capture(city.snapshot())
 	refresh()
+	if profile_session != null:
+		setup_profile_overlay()
+		update_profile_display()
+	else:
+		adapter.capture(city.snapshot())
 	var args := OS.get_cmdline_user_args()
-	if args.size() == 2 and args[0] == "--capture-city":
+	if profile_session == null and args.size() == 2 and args[0] == "--capture-city":
 		capture_mode = true
 		call_deferred("capture_fixture", args[1])
 
@@ -450,6 +473,9 @@ func tend_habitat(id: String) -> void:
 		status_label.text = "%s selected · no whole Gold ready." % city.find_building(id)["kind"]
 
 func _gui_input(event: InputEvent) -> void:
+	if profile_session != null and (profile_view_invalid or not profile_confirmed or profile_session.status() != "ready"):
+		accept_event()
+		return
 	# In placement mode a drag only edits the preview. Release never commits.
 	# Child controls retain their own GUI events; touch uses mouse emulation.
 	if map_place_mode and event is InputEventMouseMotion:
@@ -513,8 +539,88 @@ func _gui_input(event: InputEvent) -> void:
 		return
 	status_label.text = "Select a building, or switch map mode to preview a placement."
 
+func setup_profile_overlay() -> void:
+	profile_overlay = ColorRect.new()
+	profile_overlay.color = Color("#183d4b")
+	profile_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	profile_overlay.focus_mode = Control.FOCUS_ALL
+	add_child(profile_overlay)
+	profile_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	profile_overlay.hide()
+	profile_overlay_text = Label.new()
+	profile_overlay_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	profile_overlay_text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	profile_overlay_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	profile_overlay_text.add_theme_font_size_override("font_size", 24)
+	profile_overlay.add_child(profile_overlay_text)
+	profile_overlay_text.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+func update_profile_display() -> void:
+	var state: String = "unavailable" if profile_view_invalid else profile_session.status()
+	var terminal: bool = state in ["unavailable", "read-only", "new"]
+	var text: String = "Opening saved city…"
+	if state == "saving":
+		text = "Saving… · city changes await confirmation"
+	elif state == "ready" and profile_confirmed:
+		text = "Saved · breeding, battle and production art not yet wired"
+	elif terminal:
+		text = "Save unavailable · invalid confirmed city. Reload." if profile_view_invalid else str(profile_session.last_result().get("message", "Save unavailable. Reload to reconcile."))
+	profile_footer.text = text
+	# Before the first acknowledged checkpoint, conceal the placeholder city.
+	# On failure after acknowledgement, retain the last confirmed view beneath
+	# a blocking overlay rather than grant access to a new unsaved city.
+	var block_view: bool = not profile_confirmed or terminal
+	if block_view:
+		profile_overlay.color = Color(0.09, 0.24, 0.29, 0.86 if profile_confirmed else 1.0)
+		profile_overlay_text.text = text
+	if block_view and not profile_overlay.visible:
+		profile_overlay.show()
+		profile_overlay.grab_focus()
+	elif not block_view and profile_overlay.visible:
+		profile_overlay.hide()
+
+func process_profile(now: int, wall_ms: int) -> void:
+	if profile_view_invalid:
+		return
+	var before: String = profile_session.status()
+	if before in ["opening", "saving"]:
+		profile_session.poll(wall_ms)
+		var after: String = profile_session.status()
+		# Opening settles wall-clock offline time at this sample. Accumulate
+		# subsequent monotonic time, including time spent awaiting writes.
+		if before == "opening" and after == "saving":
+			last_ms = now
+		if after == "ready":
+			var confirmed: Dictionary = profile_session.snapshot()
+			if not city.restore_snapshot(confirmed):
+				# A contract breach is never a license to show speculative effects.
+				profile_view_invalid = true
+				update_profile_display()
+				return
+			var first_confirmation: bool = not profile_confirmed
+			profile_confirmed = true
+			var result: Dictionary = profile_session.last_result()
+			var rename_confirmed: bool = profile_pending_kind == "rename"
+			if not profile_pending_kind.is_empty():
+				status_label.text = str(result.get("message", ""))
+				if result.get("ok", false) and map_place_mode and profile_pending_kind in ["build", "move", "restore_building"]:
+					preview_origin = profile_pending_placement
+				profile_pending_kind = ""
+			refresh()
+			if first_confirmation or rename_confirmed:
+				name_edit.text = str(city.individuals[selected_ray]["nickname"])
+		update_profile_display()
+		return
+	if before == "ready" and profile_confirmed and now - last_ms >= PROFILE_TICK_MS:
+		if profile_session.stage_tick(maxi(0, now - last_ms), wall_ms):
+			last_ms = now
+	update_profile_display()
+
 func _process(_delta: float) -> void:
 	var now := Time.get_ticks_msec()
+	if profile_session != null:
+		process_profile(now, int(Time.get_unix_time_from_system() * 1000.0))
+		return
 	var previous_revision: int = city.revision
 	var previous_xp: int = city.xp
 	city.advance(maxi(0, now - last_ms))
@@ -543,6 +649,19 @@ func next_ui_operation_id() -> String:
 
 func act(kind: String, value: String) -> void:
 	var now := Time.get_ticks_msec()
+	if profile_session != null:
+		if profile_view_invalid or not profile_confirmed or profile_session.status() != "ready":
+			status_label.text = "City not ready · wait for save confirmation or reload."
+			return
+		if profile_session.stage_command(kind, value, next_ui_operation_id(), city.revision, maxi(0, now - last_ms), int(Time.get_unix_time_from_system() * 1000.0)):
+			last_ms = now
+			profile_pending_kind = kind
+			profile_pending_placement = placement_coordinates()
+			status_label.text = "Saving action…"
+		else:
+			status_label.text = "Action not queued · check save status."
+		update_profile_display()
+		return
 	var previous_revision: int = city.revision
 	city.advance(maxi(0, now - last_ms))
 	last_ms = now

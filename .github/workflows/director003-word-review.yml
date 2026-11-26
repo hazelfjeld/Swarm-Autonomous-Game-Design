@@ -1,0 +1,75 @@
+name: Little Ray v2.1 Word review
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/design/source/Little_Ray_GDD_v2.1.docx'
+      - 'docs/design/SOURCE.md'
+      - '.github/workflows/director003-word-review.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    name: Render exact Word companion for independent review
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify source identity
+        run: |
+          git rev-parse HEAD
+          python3 - <<'PY'
+          import hashlib, pathlib, re, zipfile
+          p = pathlib.Path("docs/design/source/Little_Ray_GDD_v2.1.docx")
+          source = pathlib.Path("docs/design/SOURCE.md").read_text()
+          rows = [line for line in source.splitlines() if "Full v2.1 Word companion" in line]
+          assert len(rows) == 1, rows
+          expected = re.findall(r"`([0-9a-f]{64})`", rows[0])
+          actual = hashlib.sha256(p.read_bytes()).hexdigest()
+          assert expected == [actual], (expected, actual)
+          with zipfile.ZipFile(p) as z:
+              assert z.testzip() is None
+          print("WORD_SOURCE_SHA256", actual)
+          print("WORD_SOURCE_BYTES", p.stat().st_size)
+          PY
+      - name: Install local renderer
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libreoffice-writer poppler-utils fonts-liberation
+          libreoffice --version
+      - name: Render PDF and all page images
+        run: |
+          mkdir -p word-review/pages
+          cp docs/design/source/Little_Ray_GDD_v2.1.docx word-review/
+          git rev-parse HEAD > word-review/commit.txt
+          sha256sum word-review/Little_Ray_GDD_v2.1.docx > word-review/source-sha256.txt
+          libreoffice -env:UserInstallation=file:///tmp/little-ray-word-review --headless --convert-to pdf --outdir word-review word-review/Little_Ray_GDD_v2.1.docx
+          test -s word-review/Little_Ray_GDD_v2.1.pdf
+          pdfinfo word-review/Little_Ray_GDD_v2.1.pdf | tee word-review/pdfinfo.txt
+          pdftoppm -r 110 -png word-review/Little_Ray_GDD_v2.1.pdf word-review/pages/page
+          pdftotext -layout word-review/Little_Ray_GDD_v2.1.pdf word-review/rendered-text.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root = Path("word-review")
+          pages = sorted((root / "pages").glob("page-*.png"))
+          n = int(re.search(r"^Pages:\s+(\d+)", (root / "pdfinfo.txt").read_text(), re.M).group(1))
+          assert n > 0 and len(pages) == n and all(p.stat().st_size > 0 for p in pages)
+          assert (root / "rendered-text.txt").stat().st_size > 0
+          print("WORD_RENDER_PAGES", n)
+          print("Rendering success only; independent page-by-page visual inspection and clicked-link behavior are still required.")
+          PY
+      - name: Retain exact source and review artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: little-ray-v21-word-review
+          path: word-review/
+          retention-days: 3
+          if-no-files-found: error

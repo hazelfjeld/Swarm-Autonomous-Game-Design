@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "gameplay",
-  "run_id": "gameplay-20261126T0417Z-g54-gold-marker-5e71",
+  "run_id": null,
   "generation": 54,
-  "acquired_at": "2026-11-26T04:16:43.079Z",
-  "expires_at": "2026-11-26T04:46:43.079Z"
+  "acquired_at": null,
+  "expires_at": null
 }

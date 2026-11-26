@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 87,
-  "run_id": "mountain-mover-20261126T1347Z-city-package",
-  "acquired_at": "2026-11-26T13:47:37.000Z",
-  "expires_at": "2026-11-26T14:17:37.000Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

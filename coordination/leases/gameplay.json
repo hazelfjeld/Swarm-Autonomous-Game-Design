@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "gameplay",
-  "run_id": "gameplay-20261126T171919285Z-g67-harvest",
+  "run_id": null,
   "generation": 67,
-  "acquired_at": "2026-11-26T17:19:19.285Z",
-  "expires_at": "2026-11-26T17:49:19.285Z"
+  "acquired_at": null,
+  "expires_at": null
 }

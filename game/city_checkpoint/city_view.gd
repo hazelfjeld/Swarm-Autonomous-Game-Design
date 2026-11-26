@@ -543,12 +543,16 @@ func next_ui_operation_id() -> String:
 
 func act(kind: String, value: String) -> void:
 	var now := Time.get_ticks_msec()
+	var previous_revision: int = city.revision
 	city.advance(maxi(0, now - last_ms))
 	last_ms = now
 	var result: Dictionary = city.command(kind, value, next_ui_operation_id(), city.revision)
 	status_label.text = str(result["message"])
-	if result["ok"]:
+	# A builder deadline can commit XP/state before a now-invalid action.
+	# Capture that independent transition even when the command is rejected.
+	if result["ok"] or city.revision != previous_revision:
 		adapter.capture(city.snapshot())
+	if result["ok"]:
 		if map_place_mode and kind in ["build", "move", "restore_building"]:
 			preview_origin = placement_coordinates()
 	refresh()
@@ -1225,4 +1229,54 @@ func capture_fixture(directory: String) -> void:
 		get_tree().quit(1)
 		return
 	print("CITY_UI_OPERATION_PASS: retained sparse receipt, reset UI counter, fresh same-payload feed, old retry and conflicting payload")
+	# Isolated deterministic clock-offset regression after all ordinary-time
+	# screenshots and input checks. No production time acceleration.
+	set_process(false)
+	city = Model.new()
+	adapter = Adapter.new()
+	op_count = 0
+	last_ms = Time.get_ticks_msec()
+	adapter.capture(city.snapshot())
+	act("build", "light,3,0")
+	var timer_revision: int = city.revision
+	var timer_gold: int = city.gold
+	var pending_snapshot: Dictionary = adapter.last_snapshot.duplicate(true)
+	if city.construction.is_empty() or timer_revision != 1 or timer_gold != 1000 or pending_snapshot != city.snapshot():
+		push_error("Timer capture fixture failed to start construction")
+		get_tree().quit(1)
+		return
+	# A rejected action without a deadline should not capture or add a receipt.
+	act("build", "light,3,0")
+	if status_label.text != "Builder busy; wait or cancel." or city.revision != timer_revision or adapter.last_snapshot != pending_snapshot or city.receipts.size() != 1:
+		push_error("Rejected pre-deadline action changed checkpoint or receipts")
+		get_tree().quit(1)
+		return
+	act("cancel_build", "")
+	if not city.construction.is_empty() or city.gold != 1160 or city.xp != 0 or city.revision != timer_revision + 1 or adapter.last_snapshot != city.snapshot():
+		push_error("Successful early cancel did not capture the refund")
+		get_tree().quit(1)
+		return
+	act("build", "light,3,0")
+	timer_revision = city.revision
+	timer_gold = city.gold
+	var timer_receipts: int = city.receipts.size()
+	if city.construction.is_empty() or timer_receipts != 3:
+		push_error("Timer capture fixture failed to restart construction")
+		get_tree().quit(1)
+		return
+	# The action reaches the deadline first; cancellation must now fail,
+	# but completion and XP must still reach the in-memory checkpoint.
+	last_ms = Time.get_ticks_msec() - 30000
+	act("cancel_build", "")
+	if status_label.text != "No construction to cancel." or not city.construction.is_empty() or city.revision != timer_revision + 1 or city.xp != 50 or city.gold != timer_gold or city.receipts.size() != timer_receipts or city.find_building("building-2").is_empty() or adapter.last_snapshot != city.snapshot():
+		push_error("Rejected deadline action lost committed builder state")
+		get_tree().quit(1)
+		return
+	var completed_snapshot: Dictionary = adapter.last_snapshot.duplicate(true)
+	_process(0.0)
+	if city.revision != timer_revision + 1 or city.xp != 50 or adapter.last_snapshot != completed_snapshot:
+		push_error("Next frame repeated or lost builder completion")
+		get_tree().quit(1)
+		return
+	print("CITY_TIMER_CAPTURE_PASS: rejected pre-deadline action, successful cancel refund, rejected post-deadline cancel captures one completion, next frame no duplicate")
 	get_tree().quit(0)

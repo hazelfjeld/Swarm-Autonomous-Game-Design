@@ -8,6 +8,7 @@ var failures: Array[String] = []
 
 func _initialize() -> void:
 	_profile_commit_tests()
+	_profile_read_tests()
 	var root := "user://test_%s" % Time.get_ticks_usec()
 	DirAccess.make_dir_recursive_absolute(root)
 	var path := root + "/probe.json"
@@ -98,7 +99,8 @@ func _check(ok: bool, description: String) -> void:
 
 ## Domain fixture only; the real city owns its complete validator and restore.
 func _valid_profile_fixture(value: Dictionary) -> bool:
-	return value.get("gold") is int and int(value.gold) >= 0 and value.get("receipts") is Dictionary
+	var gold: Variant = value.get("gold")
+	return (gold is int or gold is float) and is_finite(float(gold)) and float(gold) == floor(float(gold)) and gold >= 0 and value.get("receipts") is Dictionary
 
 func _profile_commit_tests() -> void:
 	var marker := 1700000000000
@@ -153,3 +155,49 @@ func _profile_commit_tests() -> void:
 	var third := recovered.begin(candidate, 14, marker + 3000)
 	_check(third.ok and recovered.mark_unknown(15) and recovered.status() == "unavailable", "timeout/refusal locks further writes")
 	_check(recovered.committed().storage_revision == 14, "timeout does not claim new generation committed")
+
+## Reconcile actual serialized bytes, not trusted caller-provided counters.
+func _profile_read_tests() -> void:
+	var marker := 1700000000000
+	var snapshot := {"revision": 7, "gold": 1200, "receipts": {"ui-1000": "collect"}}
+	var original := ProfileCommit.new(_valid_profile_fixture)
+	_check(original.initialize(snapshot, 12, marker), "recovery fixture initialized")
+	var next := original.begin(snapshot, 12, marker + 1000)
+	_check(next.ok, "serialized envelope prepared")
+	var loaded := ProfileCommit.new(_valid_profile_fixture)
+	_check(loaded.initialize_from_text(next.payload) and loaded.status() == "ready", "valid serialized envelope read")
+	_check(loaded.committed().storage_revision == 13 and loaded.committed().wall_marker_ms == marker + 1000, "loaded generation and marker exact")
+	_check(loaded.committed().model.gold == 1200 and loaded.committed().model.receipts.has("ui-1000"), "domain state and receipt survive JSON")
+	_check(not loaded.initialize_from_text(next.payload) and loaded.status() == "ready", "live state cannot be reinitialized from text")
+	var continued := loaded.begin(snapshot, 13, marker + 2000)
+	_check(continued.ok and continued.storage_revision == 14, "loaded generation is next write authority")
+	var bad_inputs: Array[String] = ["", "{broken", "null", "[]", "{}"]
+	var valid: Dictionary = JSON.parse_string(next.payload)
+	for field in ["storage_revision", "wall_marker_ms", "model"]:
+		var missing := valid.duplicate(true)
+		missing.erase(field)
+		bad_inputs.append(JSON.stringify(missing))
+	for field in ["storage_revision", "wall_marker_ms"]:
+		for invalid in [-1, 0.5, "13", true, null, 9007199254740992]:
+			var malformed := valid.duplicate(true)
+			malformed[field] = invalid
+			bad_inputs.append(JSON.stringify(malformed))
+	var extra := valid.duplicate(true)
+	extra["unexpected"] = 1
+	bad_inputs.append(JSON.stringify(extra))
+	var bad_model := valid.duplicate(true)
+	bad_model.model.gold = -1
+	bad_inputs.append(JSON.stringify(bad_model))
+	bad_model = valid.duplicate(true)
+	bad_model.model.revision = "7"
+	bad_inputs.append(JSON.stringify(bad_model))
+	bad_model = valid.duplicate(true)
+	bad_model.model = []
+	bad_inputs.append(JSON.stringify(bad_model))
+	for index in range(bad_inputs.size()):
+		var blocked := ProfileCommit.new(_valid_profile_fixture)
+		_check(not blocked.initialize_from_text(bad_inputs[index]) and blocked.status() == "unavailable", "malformed persisted envelope blocked %s" % index)
+		_check(blocked.committed().is_empty() and not blocked.initialize(snapshot, 0, marker) and not blocked.begin(snapshot, 0, marker).ok, "malformed storage cannot become blank writable profile %s" % index)
+		_check(not blocked.initialize_from_text(next.payload), "failed reader requires explicit new recovery instance %s" % index)
+	var recovered := ProfileCommit.new(_valid_profile_fixture)
+	_check(recovered.initialize_from_text(next.payload), "explicit fresh recovery reader accepts valid reconciled bytes")

@@ -34,7 +34,7 @@ func _check(condition: bool, label: String) -> void:
 
 func _initialize() -> void:
 	_run()
-	_check(checks == 37, "all native session scenarios reached")
+	_check(checks == 55, "all native session scenarios reached")
 	print(JSON.stringify({"city_profile_session": "pass" if failures.is_empty() else "fail", "checks": checks, "failures": failures}))
 	quit(0 if failures.is_empty() else 1)
 
@@ -126,3 +126,31 @@ func _run() -> void:
 	p.ack()
 	_check(session.poll(marker + 1) and not session.export_backup().is_empty(), "export resumes after ack")
 
+
+	# Explicit restoration is separate from preview and from ordinary writes.
+	var latest: Dictionary = session.snapshot()
+	_check(not session.stage_restore(backup, preview.confirmation, marker + 2) and p.writes == 3, "intervening save invalidates preview")
+	var restore_preview: Dictionary = session.preview_backup(backup)
+	_check(not restore_preview.confirmation.is_empty(), "ready preview binds generation and bytes")
+	_check(not session.stage_restore(backup + " ", restore_preview.confirmation, marker + 2), "changed bytes refused")
+	_check(not session.stage_restore(backup, "", marker + 2), "missing confirmation refused")
+	_check(not session.stage_restore(backup, restore_preview.confirmation, -1), "invalid restore clock refused")
+	_check(not readonly_session.stage_restore(backup, restore_preview.confirmation, marker + 2), "second writer cannot restore")
+	_check(session.snapshot() == latest and p.writes == 3, "rejected restores did not stage")
+	_check(session.stage_restore(backup, restore_preview.confirmation, marker + 2), "confirmed restore queued")
+	_check(session.status() == "saving" and session.snapshot() == latest and session.last_result().is_empty(), "restore hidden until acknowledgement")
+	_check(not session.stage_restore(backup, restore_preview.confirmation, marker + 2), "overlapping restore refused")
+	var restored_payload: Dictionary = JSON.parse_string(p.payload)
+	_check(int(restored_payload.storage_revision) == 4 and int(restored_payload.model.revision) > int(latest.revision), "restore advances local generation and domain revision")
+	_check(restored_payload.wall_marker_ms == marker + 2 and restored_payload.model.elapsed_ms == saved.elapsed_ms and restored_payload.model.food == saved.food, "restore exact domain timeline without extra income")
+	p.ack()
+	_check(session.poll(marker + 2) and session.status() == "ready" and session.last_result().ok, "restore acknowledged")
+	_check(session.snapshot().food == saved.food and session.snapshot().elapsed_ms == saved.elapsed_ms and session.snapshot().receipts == saved.receipts, "restore publishes saved city and receipts")
+	_check(not session.stage_restore(backup, restore_preview.confirmation, marker + 2), "used preview no longer valid")
+	var restore_after: Dictionary = session.preview_backup(backup)
+	var confirmed_restored: Dictionary = session.snapshot()
+	_check(session.stage_restore(backup, restore_after.confirmation, marker + 3), "second explicit restore queued for fault test")
+	var uncertain: Dictionary = JSON.parse_string(p.payload)
+	p.deliver({"kind": "write", "ok": true, "storage_revision": uncertain.storage_revision, "observed_text": "wrong"})
+	_check(not session.poll(marker + 3) and session.status() == "unavailable", "restore wrong readback fails closed")
+	_check(session.snapshot() == confirmed_restored and session.export_backup().is_empty(), "uncertain restore preserves confirmed view and refuses export")

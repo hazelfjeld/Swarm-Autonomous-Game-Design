@@ -2,6 +2,11 @@ extends Control
 
 const Model = preload("res://city_model.gd")
 const Adapter = preload("res://checkpoint_adapter.gd")
+# Keep the map header, playable projection and bottom hint in distinct bands.
+const MAP_INPUT_RECT := Rect2(18, 198, 716, 336)
+const MAP_ORIGIN := Vector2(370, 222)
+const OPENING_MAP_ZOOM: float = 0.94
+const EXPANDED_MAP_ZOOM: float = 0.72
 var city = Model.new()
 var adapter = Adapter.new()
 var last_ms: int = 0
@@ -125,11 +130,11 @@ func _ready() -> void:
 	cancel_build_button = button_at("Cancel build", Vector2(590, 570), func(): act("cancel_build", ""))
 	cancel_build_button.size = Vector2(142, 42)
 	cancel_build_button.add_theme_font_size_override("font_size", 15)
-	map_mode_button = button_at("Map: tend / collect", Vector2(30, 150), toggle_map_mode)
-	map_mode_button.size = Vector2(250, 34)
+	map_mode_button = button_at("Map: tend / collect", Vector2(30, 145), toggle_map_mode)
+	map_mode_button.size = Vector2(250, 44)
 	map_mode_button.add_theme_font_size_override("font_size", 15)
-	cancel_preview_button = button_at("Cancel preview", Vector2(290, 150), cancel_map_preview)
-	cancel_preview_button.size = Vector2(175, 34)
+	cancel_preview_button = button_at("Cancel preview", Vector2(290, 145), cancel_map_preview)
+	cancel_preview_button.size = Vector2(175, 44)
 	cancel_preview_button.add_theme_font_size_override("font_size", 15)
 	cancel_preview_button.disabled = true
 	status_label = label_at("Tap a habitat or farm to collect; switch map mode to choose a placement.", Vector2(30, 617), Vector2(700, 34), 16)
@@ -396,7 +401,7 @@ func previewable_selection() -> bool:
 	return parts.size() == 2 and parts[0] in ["build", "move", "restore_building"]
 
 func map_point_is_usable(point: Vector2) -> bool:
-	if not Rect2(18, 186, 716, 348).has_point(point):
+	if not MAP_INPUT_RECT.has_point(point):
 		return false
 	var cell := map_cell(point)
 	return cell.x >= 0 and cell.y >= 0 and cell.x < Model.ISLAND_SIZE and cell.y < Model.ISLAND_SIZE
@@ -656,8 +661,8 @@ func refresh() -> void:
 	queue_redraw()
 
 func iso(x: float, y: float) -> Vector2:
-	var zoom: float = 0.72 if city.owned_sectors.size() > 4 or selected_placement().begins_with("buy_sector:") else 1.0
-	return Vector2(370 + (x - y) * 38 * zoom, 186 + (x + y) * 20 * zoom)
+	var zoom: float = EXPANDED_MAP_ZOOM if city.owned_sectors.size() > 4 or selected_placement().begins_with("buy_sector:") else OPENING_MAP_ZOOM
+	return MAP_ORIGIN + Vector2((x - y) * 38 * zoom, (x + y) * 20 * zoom)
 
 func tile(x: float, y: float, w: float, h: float, fill: Color) -> void:
 	var points := PackedVector2Array([iso(x,y),iso(x+w,y),iso(x+w,y+h),iso(x,y+h)])
@@ -670,6 +675,8 @@ func ink(value: String, pos: Vector2, font_size: int, color: Color = Color("#eef
 func _draw() -> void:
 	draw_rect(Rect2(18, 109, 716, 456), Color("#12617a"))
 	draw_circle(Vector2(370, 345), 220, Color("#197d8c"))
+	# Paint a distinct noninteractive header behind the land title and map controls.
+	draw_rect(Rect2(18, 109, 716, 89), Color("#183d4b"))
 	draw_rect(Rect2(744, 109, 340, 508), Color("#183d4b"))
 	for key in city.owned_sectors:
 		var parts: PackedStringArray = key.split(",")
@@ -816,11 +823,34 @@ func drag_point_fixture(start: Vector2, finish: Vector2) -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
+func map_layout_fixture_ok() -> bool:
+	# Test the actual control bounds and every owned cell center at the live zoom.
+	for control in [map_mode_button, cancel_preview_button]:
+		if control.get_rect().end.y > MAP_INPUT_RECT.position.y or control.size.y < 44 or map_point_is_usable(control.get_rect().get_center()):
+			return false
+	# At (0,0) the tallest current habitat title has the least clearance.
+	if iso(1.5, 1.5).y - 47.0 - 15.0 < MAP_INPUT_RECT.position.y:
+		return false
+	for key in city.owned_sectors:
+		var parts: PackedStringArray = key.split(",")
+		var sx: int = int(parts[0]) * 4
+		var sy: int = int(parts[1]) * 4
+		for y in range(sy, sy + 4):
+			for x in range(sx, sx + 4):
+				var point := iso(x + 0.5, y + 0.5)
+				if not map_point_is_usable(point) or map_cell(point) != Vector2i(x, y):
+					return false
+	return true
+
 func capture_fixture(directory: String) -> void:
 	# CI-only native GUI fixture; no acceleration in normal play.
 	await get_tree().process_frame
 	await RenderingServer.frame_post_draw
 	if get_viewport().get_texture().get_image().save_png(directory + "/01-opening.png") != OK:
+		get_tree().quit(1)
+		return
+	if not map_layout_fixture_ok():
+		push_error("Opening map header or cell projection regression")
 		get_tree().quit(1)
 		return
 	var initial_state: Dictionary = city.snapshot()
@@ -987,6 +1017,11 @@ func capture_fixture(directory: String) -> void:
 		get_tree().quit(1)
 		return
 	print("CITY_LAND_GUI_PASS: paid adjacent sector, paid obstacle clearance, ordinary 60-second timer, exact XP and usable land")
+	if not map_layout_fixture_ok():
+		push_error("Expanded map header or cell projection regression")
+		get_tree().quit(1)
+		return
+	print("CITY_MAP_LAYOUT_GUI_PASS: map controls outside input band, 44-unit button heights, all owned cell centers reachable at opening and expanded zoom")
 	var before_store: int = city.gold
 	for i in range(build_choice.item_count):
 		if build_choice.get_item_metadata(i) == "store_building:farm-1":

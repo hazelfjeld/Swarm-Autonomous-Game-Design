@@ -7,6 +7,8 @@ const MAP_INPUT_RECT := Rect2(18, 198, 716, 336)
 const MAP_ORIGIN := Vector2(370, 222)
 const OPENING_MAP_ZOOM: float = 0.94
 const EXPANDED_MAP_ZOOM: float = 0.72
+const GOLD_MARKER_OFFSET := Vector2(41, -33)
+const GOLD_MARKER_RADIUS: float = 14.0
 var city = Model.new()
 var adapter = Adapter.new()
 var last_ms: int = 0
@@ -416,6 +418,37 @@ func preview_point(point: Vector2) -> bool:
 	status_label.text = "Preview cell (%d,%d) · confirm or cancel below." % [cell.x, cell.y]
 	return true
 
+# Gold markers live in screen space, not inside the inverse-projected tile.
+func gold_marker_center(b: Dictionary) -> Vector2:
+	var half: float = float(b["size"]) * 0.5
+	return iso(float(b["x"]) + half, float(b["y"]) + half) + GOLD_MARKER_OFFSET
+
+func gold_marker_at(point: Vector2) -> String:
+	if not MAP_INPUT_RECT.has_point(point):
+		return ""
+	var target: String = ""
+	var nearest: float = GOLD_MARKER_RADIUS * GOLD_MARKER_RADIUS
+	for id in city.habitat_ids():
+		if city.stored_gold(id) <= 0:
+			continue
+		var distance: float = point.distance_squared_to(gold_marker_center(city.find_building(id)))
+		# Nearest visible marker wins; ties follow the last drawn marker.
+		if distance <= nearest:
+			nearest = distance
+			target = id
+	return target
+
+func tend_habitat(id: String) -> void:
+	for i in range(habitat_choice.item_count):
+		if habitat_choice.get_item_metadata(i) == id:
+			habitat_choice.select(i)
+			choose_habitat(i)
+			break
+	if city.stored_gold(id) > 0:
+		act("collect", id)
+	else:
+		status_label.text = "%s selected · no whole Gold ready." % city.find_building(id)["kind"]
+
 func _gui_input(event: InputEvent) -> void:
 	# In placement mode a drag only edits the preview. Release never commits.
 	# Child controls retain their own GUI events; touch uses mouse emulation.
@@ -444,7 +477,14 @@ func _gui_input(event: InputEvent) -> void:
 				set_placement_coordinates(drag_origin)
 				status_label.text = "Outside placement area · previous preview restored."
 		return
-	if event.pressed or not map_point_is_usable(event.position):
+	if event.pressed:
+		return
+	var marker_id := gold_marker_at(event.position)
+	if not marker_id.is_empty():
+		accept_event()
+		tend_habitat(marker_id)
+		return
+	if not map_point_is_usable(event.position):
 		return
 	var cell := map_cell(event.position)
 	accept_event()
@@ -457,15 +497,7 @@ func _gui_input(event: InputEvent) -> void:
 			status_label.text = "Construction · %ds remaining" % city.construction_remaining()
 			return
 		if city.habitat_ids().has(id):
-			for i in range(habitat_choice.item_count):
-				if habitat_choice.get_item_metadata(i) == id:
-					habitat_choice.select(i)
-					choose_habitat(i)
-					break
-			if city.stored_gold(id) > 0:
-				act("collect", id)
-			else:
-				status_label.text = "%s selected · no whole Gold ready." % b["kind"]
+			tend_habitat(id)
 		elif city.farm_ids().has(id):
 			for i in range(farm_choice.item_count):
 				if farm_choice.get_item_metadata(i) == id:
@@ -726,6 +758,12 @@ func _draw() -> void:
 			var valid: bool = city.can_place(x, y, footprint, selection[1] if selection[0] == "move" else "")
 			var points := PackedVector2Array([iso(x,y),iso(x+footprint,y),iso(x+footprint,y+footprint),iso(x,y+footprint),iso(x,y)])
 			draw_polyline(points, Color("#f3ffe0") if valid else Color("#ffac75"), 3.0, true)
+	# Draw collection markers last so a neighboring building cannot hide a live hit target.
+	for id in city.habitat_ids():
+		if city.stored_gold(id) > 0:
+			var marker := gold_marker_center(city.find_building(id))
+			draw_circle(marker, GOLD_MARKER_RADIUS, Color("#ffce63"))
+			ink("G", marker + Vector2(-6, 5), 14, Color("#533e26"))
 	ink("Tap a building to tend · map placement mode previews only" if not map_place_mode else "Tap or drag · white = free / orange = blocked · confirm / cancel", Vector2(37, 542), 15)
 
 func draw_building(b: Dictionary) -> void:
@@ -755,9 +793,6 @@ func draw_building(b: Dictionary) -> void:
 			ink("%d/%d · %d G" % [residents.size(), city.habitat_capacity(id), city.stored_gold(id)], center + Vector2(-44,58), 15)
 			if city.upgrading(id):
 				ink("Paused · %ds" % city.construction_remaining(), center + Vector2(-42,35), 14)
-			if city.stored_gold(id) > 0:
-				draw_circle(center + Vector2(41,-33), 14, Color("#ffce63"))
-				ink("G", center + Vector2(35,-28), 14, Color("#533e26"))
 			ink(("Large " if city.habitat_capacity(id) == Model.LARGE_CAPACITY else "") + str(b["kind"]), center + Vector2(-65,-47), 15)
 		"hatchery":
 			tile(x,y,footprint,footprint,Color("#e5c58d"))
@@ -1034,6 +1069,52 @@ func capture_fixture(directory: String) -> void:
 		get_tree().quit(1)
 		return
 	print("CITY_MAP_LAYOUT_GUI_PASS: map controls outside input band, 44-unit button heights, all owned cell centers reachable at opening and expanded zoom")
+	# Native regression: at expanded zoom the starter marker projects outside
+	# the island; a moved Light marker projects inside the adjacent Tide home.
+	# Existing real-time construction/clearance waits have accrued both bins.
+	act("move", "building-1,0,3")
+	var light_marker := gold_marker_center(city.find_building("building-1"))
+	var tide_marker := gold_marker_center(city.find_building("tide-1"))
+	var tide_footprint := Rect2i(0, 0, 3, 3)
+	if not tide_footprint.has_point(map_cell(light_marker)) or map_point_is_usable(tide_marker) or gold_marker_at(light_marker) != "building-1" or gold_marker_at(tide_marker) != "tide-1":
+		push_error("Gold marker regression fixture did not reproduce expanded geometry")
+		get_tree().quit(1)
+		return
+	var marker_gold: int = city.gold
+	var marker_revision: int = city.revision
+	await click_fixture(map_mode_button)
+	await click_point_fixture(light_marker)
+	if not map_place_mode or city.gold != marker_gold or city.revision != marker_revision:
+		push_error("Placement mode must not collect Gold markers")
+		get_tree().quit(1)
+		return
+	await click_fixture(cancel_preview_button)
+	var light_ready: int = city.stored_gold("building-1")
+	var tide_ready: int = city.stored_gold("tide-1")
+	await click_point_fixture(light_marker)
+	if light_ready <= 0 or tide_ready <= 0 or selected_habitat != "building-1" or city.revision != marker_revision + 1 or city.gold - marker_gold < light_ready or city.gold - marker_gold > light_ready + 1 or city.stored_gold("building-1") != 0 or city.stored_gold("tide-1") < tide_ready:
+		push_error("Expanded Light marker failed to collect its own bin exactly once")
+		get_tree().quit(1)
+		return
+	marker_gold = city.gold
+	tide_ready = city.stored_gold("tide-1")
+	await click_point_fixture(tide_marker)
+	if selected_habitat != "tide-1" or city.revision != marker_revision + 2 or city.gold - marker_gold < tide_ready or city.gold - marker_gold > tide_ready + 1 or city.stored_gold("tide-1") != 0 or gold_marker_at(tide_marker) != "":
+		push_error("Expanded Tide marker outside footprint failed to collect")
+		get_tree().quit(1)
+		return
+	marker_gold = city.gold
+	await click_point_fixture(tide_marker)
+	if city.gold != marker_gold or city.revision != marker_revision + 2:
+		push_error("Empty marker location collected again")
+		get_tree().quit(1)
+		return
+	act("move", "building-1,3,0")
+	if int(city.find_building("building-1")["x"]) != 3 or int(city.find_building("building-1")["y"]) != 0:
+		push_error("Gold marker fixture did not restore Light habitat")
+		get_tree().quit(1)
+		return
+	print("CITY_GOLD_MARKER_GUI_PASS: expanded off-footprint and adjacent-footprint marker clicks, independent bins, no repeat credit, placement mode preserved")
 	var before_store: int = city.gold
 	for i in range(build_choice.item_count):
 		if build_choice.get_item_metadata(i) == "store_building:farm-1":

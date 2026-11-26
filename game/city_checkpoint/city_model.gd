@@ -672,3 +672,290 @@ func snapshot() -> Dictionary:
 		"next_building_serial": next_building_serial, "farm_crops": farm_crops.duplicate(true),
 		"income_ticks": income_ticks, "elapsed_ms": elapsed_ms, "income_subticks": income_subticks,
 		"sample_claimed": sample_claimed, "crop": crop.duplicate(true), "receipts": receipts.duplicate(true)}
+
+# Domain-only checkpoint codec for the existing isolated schema. Storage,
+# wall-clock reconciliation and durable confirmation remain ARCH-002's job.
+# JSON parses numbers as floats; normalize only safe whole numbers and never
+# silently coerce strings, booleans, fractions or unknown schema fields.
+const CHECKPOINT_MAX_INTEGER = 9007199254740991
+
+static func _checkpoint_normalize(value: Variant, depth: int = 0) -> Variant:
+	if depth > 12:
+		return null
+	if value is int or value is float:
+		if not is_finite(float(value)) or value < 0 or value > CHECKPOINT_MAX_INTEGER or float(value) != floor(float(value)):
+			return null
+		return int(value)
+	if value is String or value is bool:
+		return value
+	if value is Dictionary:
+		var result: Dictionary = {}
+		for key in value:
+			if not key is String:
+				return null
+			var entry: Variant = _checkpoint_normalize(value[key], depth + 1)
+			if entry == null:
+				return null
+			result[key] = entry
+		return result
+	if value is Array:
+		var result: Array = []
+		for item in value:
+			var entry: Variant = _checkpoint_normalize(item, depth + 1)
+			if entry == null:
+				return null
+			result.append(entry)
+		return result
+	return null
+
+static func _checkpoint_fields(value: Variant, required: Array, optional: Array = []) -> bool:
+	if not value is Dictionary:
+		return false
+	for key in required:
+		if not value.has(key):
+			return false
+	for key in value:
+		if not required.has(key) and not optional.has(key):
+			return false
+	return true
+
+static func _checkpoint_int(value: Variant, minimum: int, maximum: int) -> bool:
+	return value is int and value >= minimum and value <= maximum
+
+static func _checkpoint_serial(value: Variant, prefix: String, next_serial: int) -> bool:
+	if not value is String or not value.begins_with(prefix):
+		return false
+	var suffix: String = value.substr(prefix.length())
+	return suffix.is_valid_int() and str(int(suffix)) == suffix and int(suffix) > 0 and int(suffix) < next_serial
+
+static func _checkpoint_receipt(ledger: Dictionary, id: Variant, kind: String, argument: String) -> bool:
+	return id is String and ledger.has(id) and ledger[id]["kind"] == kind and ledger[id]["argument"] == argument
+
+# Returns an empty dictionary for malformed/unsupported input, otherwise a
+# detached normalized checkpoint. Does not run timers or change live state.
+static func _validated_checkpoint(raw: Variant) -> Dictionary:
+	var normalized: Variant = _checkpoint_normalize(raw)
+	if not _checkpoint_fields(normalized, ["checkpoint_schema", "revision", "gold", "food", "xp", "individual", "individuals", "discoveries", "next_ray_serial", "habitat_bins", "founder_egg", "tutorial_sunbeam_started", "founder_placed_milestone", "trained_founders_milestone", "buildings", "stored_buildings", "construction", "owned_sectors", "starter_obstacle", "next_building_serial", "farm_crops", "income_ticks", "elapsed_ms", "income_subticks", "sample_claimed", "crop", "receipts"]):
+		return {}
+	var s: Dictionary = normalized
+	if s.checkpoint_schema != 2 or not s.checkpoint_schema is int:
+		return {}
+	for key in ["gold", "food", "xp", "revision", "elapsed_ms", "income_ticks", "income_subticks"]:
+		if not _checkpoint_int(s[key], 0, CHECKPOINT_MAX_INTEGER):
+			return {}
+	# Leave room for the next bounded elapsed-time settlement and deadlines.
+	if s.elapsed_ms > CHECKPOINT_MAX_INTEGER - 604800000 or s.revision >= CHECKPOINT_MAX_INTEGER:
+		return {}
+	for key in ["next_ray_serial", "next_building_serial"]:
+		if not _checkpoint_int(s[key], 1, CHECKPOINT_MAX_INTEGER - 1):
+			return {}
+	if s.next_ray_serial < 2:
+		return {}
+	for key in ["sample_claimed", "tutorial_sunbeam_started", "founder_placed_milestone", "trained_founders_milestone"]:
+		if not s[key] is bool:
+			return {}
+	if (s.founder_placed_milestone and not s.tutorial_sunbeam_started) or (s.trained_founders_milestone and not s.founder_placed_milestone):
+		return {}
+	for key in ["individual", "individuals", "discoveries", "habitat_bins", "founder_egg", "construction", "starter_obstacle", "farm_crops", "crop", "receipts"]:
+		if not s[key] is Dictionary:
+			return {}
+	for key in ["buildings", "stored_buildings", "owned_sectors"]:
+		if not s[key] is Array:
+			return {}
+	# The first slice has exactly the four starter sectors and at most one
+	# edge-adjacent sector, with a permanent corresponding obstacle record.
+	var opening: Array = ["0,0", "1,0", "0,1", "1,1"]
+	var adjacent: Array = ["2,0", "2,1", "0,2", "1,2"]
+	if s.owned_sectors.size() < 4 or s.owned_sectors.size() > 5:
+		return {}
+	for sector in opening:
+		if s.owned_sectors.count(sector) != 1:
+			return {}
+	var expansion: String = ""
+	for sector in s.owned_sectors:
+		if not sector is String or (not opening.has(sector) and not adjacent.has(sector)):
+			return {}
+		if adjacent.has(sector):
+			expansion = sector
+	if expansion.is_empty():
+		if not s.starter_obstacle.is_empty():
+			return {}
+	else:
+		var obstacle: Dictionary = s.starter_obstacle
+		var coordinates: PackedStringArray = expansion.split(",")
+		if not _checkpoint_fields(obstacle, ["id", "x", "y", "cleared"]) or obstacle.id != "starter-obstacle" or not obstacle.cleared is bool or not obstacle.x is int or not obstacle.y is int or obstacle.x != int(coordinates[0]) * 4 + 1 or obstacle.y != int(coordinates[1]) * 4 + 1:
+			return {}
+	var all_buildings: Dictionary = {}
+	var active: Dictionary = {}
+	var cells: Dictionary = {}
+	var counts: Dictionary = {}
+	for group in [s.buildings, s.stored_buildings]:
+		var placed: bool = group == s.buildings
+		for b in group:
+			if not _checkpoint_fields(b, ["id", "type", "kind", "x", "y", "size"], ["tier"]):
+				return {}
+			if not b.id is String or not b.type is String or all_buildings.has(b.id):
+				return {}
+			var spec: Dictionary = BUILD_TYPES.get(b.type, {})
+			if b.type == "hatchery":
+				spec = {"kind": "Hatchery", "size": 2}
+			if spec.is_empty() or b.kind != spec.kind or not b.size is int or b.size != spec.size:
+				return {}
+			if not _checkpoint_int(b.x, 0, ISLAND_SIZE - b.size) or not _checkpoint_int(b.y, 0, ISLAND_SIZE - b.size):
+				return {}
+			if b.has("tier") and (not HABITAT_ELEMENTS.has(b.type) or not _checkpoint_int(b.tier, 1, 2)):
+				return {}
+			if b.id in ["tide-1", "farm-1", "hatchery-1"]:
+				if b.type != {"tide-1": "tide", "farm-1": "farm", "hatchery-1": "hatchery"}[b.id]:
+					return {}
+			elif not _checkpoint_serial(b.id, "building-", s.next_building_serial) or b.type == "hatchery":
+				return {}
+			all_buildings[b.id] = b
+			counts[b.type] = int(counts.get(b.type, 0)) + 1
+			if placed:
+				active[b.id] = b
+			for x in range(b.x, b.x + b.size):
+				for y in range(b.y, b.y + b.size):
+					var sector: String = "%d,%d" % [floori(x / 4.0), floori(y / 4.0)]
+					if not s.owned_sectors.has(sector):
+						return {}
+					if placed:
+						var cell := Vector2i(x, y)
+						if cells.has(cell) or (not s.starter_obstacle.is_empty() and not s.starter_obstacle.cleared and x == s.starter_obstacle.x and y == s.starter_obstacle.y):
+							return {}
+						cells[cell] = true
+	for starter in ["tide-1", "farm-1", "hatchery-1"]:
+		if not all_buildings.has(starter):
+			return {}
+	if counts.get("farm", 0) > 2 or counts.get("grotto", 0) > 1:
+		return {}
+	var pending_id: String = ""
+	var job: Dictionary = s.construction
+	if not job.is_empty():
+		if not _checkpoint_fields(job, ["building_id", "deadline_ms", "cost"], ["kind"]) or not job.building_id is String or not _checkpoint_int(job.deadline_ms, s.elapsed_ms + 1, s.elapsed_ms + LARGE_DURATION_MS) or not job.cost is int:
+			return {}
+		var kind: Variant = job.get("kind", "build")
+		if kind == "clear":
+			if job.building_id != "starter-obstacle" or s.starter_obstacle.is_empty() or s.starter_obstacle.cleared or job.cost != OBSTACLE_COST or job.deadline_ms > s.elapsed_ms + OBSTACLE_DURATION_MS:
+				return {}
+		elif kind == "upgrade":
+			var b: Dictionary = active.get(job.building_id, {})
+			if b.is_empty() or not HABITAT_ELEMENTS.has(b.type) or b.get("tier", 1) != 1 or job.cost != LARGE_COST:
+				return {}
+		elif kind == "build":
+			var b: Dictionary = active.get(job.building_id, {})
+			if b.is_empty() or not _checkpoint_serial(job.building_id, "building-", s.next_building_serial) or not BUILD_TYPES.has(b.type) or b.has("tier") or job.cost != BUILD_TYPES[b.type].gold or job.deadline_ms > s.elapsed_ms + BUILD_TYPES[b.type].seconds * 1000:
+				return {}
+			pending_id = job.building_id
+		else:
+			return {}
+	# Every completed habitat (including storage) owns exactly one capped
+	# fractional bin; pending buildings cannot own residents or production.
+	var expected_bins: int = 0
+	for id in all_buildings:
+		var b: Dictionary = all_buildings[id]
+		if not HABITAT_ELEMENTS.has(b.type) or id == pending_id:
+			continue
+		expected_bins += 1
+		var bin: Variant = s.habitat_bins.get(id)
+		var cap: int = (LARGE_CAP if b.get("tier", 1) == 2 else SMALL_CAP) * TICKS_PER_GOLD
+		if not _checkpoint_fields(bin, ["ticks", "subticks"]) or not _checkpoint_int(bin.ticks, 0, cap) or not _checkpoint_int(bin.subticks, 0, 999):
+			return {}
+		if (bin.ticks == cap and bin.subticks != 0) or (not active.has(id) and bin.ticks >= TICKS_PER_GOLD):
+			return {}
+	if s.habitat_bins.size() != expected_bins:
+		return {}
+	var command_kinds: Array = ["name", "rename", "set_favorite", "sell_ray", "sample", "collect", "buy_founder", "place_founder", "move_ray", "plant", "harvest", "build", "buy_sector", "clear_obstacle", "upgrade_habitat", "move", "store_building", "restore_building", "cancel_build", "feed", "feed_level"]
+	if s.receipts.size() > s.revision:
+		return {}
+	for id in s.receipts:
+		var receipt: Variant = s.receipts[id]
+		if id.is_empty() or not _checkpoint_fields(receipt, ["kind", "argument", "message"]) or not command_kinds.has(receipt.kind) or not receipt.argument is String or not receipt.message is String:
+			return {}
+	for species in s.discoveries:
+		if not SPECIES.has(species) or not s.discoveries[species] is bool or not s.discoveries[species]:
+			return {}
+	if not s.discoveries.has("blueberry") or s.individuals.is_empty():
+		return {}
+	var resident_counts: Dictionary = {}
+	var acquisition_ids: Dictionary = {}
+	for id in s.individuals:
+		var ray: Variant = s.individuals[id]
+		if not _checkpoint_fields(ray, ["id", "species", "nickname", "level", "pips", "rank", "habitat_id", "parents", "acquisition_receipt", "equipped_skills", "runes", "favorite"]) or not _checkpoint_serial(id, "ray-", s.next_ray_serial) or ray.id != id or not ray.species is String or not SPECIES.has(ray.species) or not s.discoveries.has(ray.species):
+			return {}
+		if not ray.nickname is String or ray.nickname.strip_edges().is_empty() or ray.nickname.length() > 24 or not _checkpoint_int(ray.level, 1, 10) or not _checkpoint_int(ray.pips, 0, 3) or (ray.level == 10 and ray.pips != 0) or not _checkpoint_int(ray.rank, 0, 0) or not ray.favorite is bool:
+			return {}
+		# Breeding, skills and runes are not yet part of this isolated codec.
+		for key in ["parents", "equipped_skills", "runes"]:
+			if not ray[key] is Array or not ray[key].is_empty():
+				return {}
+		if not ray.habitat_id is String or not active.has(ray.habitat_id) or not s.habitat_bins.has(ray.habitat_id):
+			return {}
+		var home: Dictionary = active[ray.habitat_id]
+		if not SPECIES[ray.species].elements.has(HABITAT_ELEMENTS[home.type]):
+			return {}
+		resident_counts[ray.habitat_id] = int(resident_counts.get(ray.habitat_id, 0)) + 1
+		if resident_counts[ray.habitat_id] > (LARGE_CAPACITY if home.get("tier", 1) == 2 else SMALL_CAPACITY):
+			return {}
+		if not ray.acquisition_receipt is String:
+			return {}
+		if id == "ray-1":
+			if ray.species != "blueberry" or ray.acquisition_receipt != "starter":
+				return {}
+		else:
+			if not _checkpoint_receipt(s.receipts, ray.acquisition_receipt, "buy_founder", ray.species) or acquisition_ids.has(ray.acquisition_receipt):
+				return {}
+			acquisition_ids[ray.acquisition_receipt] = true
+	var egg: Dictionary = s.founder_egg
+	if not egg.is_empty():
+		if not _checkpoint_fields(egg, ["species", "deadline_ms", "purchase_receipt", "tutorial"]) or not egg.species is String or not FOUNDER_GATES.has(egg.species) or not egg.tutorial is bool or not active.has("hatchery-1") or not _checkpoint_int(egg.deadline_ms, 1, s.elapsed_ms + 120000):
+			return {}
+		if not _checkpoint_receipt(s.receipts, egg.purchase_receipt, "buy_founder", egg.species) or acquisition_ids.has(egg.purchase_receipt) or (egg.tutorial and (egg.species != "sunbeam" or not s.tutorial_sunbeam_started or s.founder_placed_milestone)):
+			return {}
+	for id in s.farm_crops:
+		var crop_job: Variant = s.farm_crops[id]
+		if not active.has(id) or active[id].type != "farm" or id == pending_id or not _checkpoint_fields(crop_job, ["recipe", "deadline_ms", "job_id"]) or not crop_job.recipe is String or not CROPS.has(crop_job.recipe):
+			return {}
+		if not _checkpoint_int(crop_job.deadline_ms, 1, s.elapsed_ms + CROPS[crop_job.recipe].seconds * 1000) or not crop_job.job_id is String or not s.receipts.has(crop_job.job_id):
+			return {}
+		var receipt: Dictionary = s.receipts[crop_job.job_id]
+		if receipt.kind != "plant" or (receipt.argument != id + ":" + crop_job.recipe and not (id == "farm-1" and receipt.argument == crop_job.recipe)):
+			return {}
+	# Legacy read-only aliases must agree rather than becoming a second truth.
+	if s.individual != s.individuals.get("ray-1", {}) or s.crop != s.farm_crops.get("farm-1", {}) or s.income_ticks != s.habitat_bins["tide-1"].ticks or s.income_subticks != s.habitat_bins["tide-1"].subticks:
+		return {}
+	return s
+
+# Callable seam for ARCH-002's candidate validator. No I/O or live mutation.
+static func validate_snapshot(raw: Variant) -> bool:
+	return not _validated_checkpoint(raw).is_empty()
+
+# Explicit restore of a validated detached checkpoint. No partial application,
+# no offline credit, no reward replay, no claim of durable storage.
+func restore_snapshot(raw: Variant) -> bool:
+	var s: Dictionary = _validated_checkpoint(raw)
+	if s.is_empty():
+		return false
+	gold = s.gold
+	food = s.food
+	xp = s.xp
+	revision = s.revision
+	elapsed_ms = s.elapsed_ms
+	individuals = s.individuals
+	discoveries = s.discoveries
+	next_ray_serial = s.next_ray_serial
+	habitat_bins = s.habitat_bins
+	founder_egg = s.founder_egg
+	tutorial_sunbeam_started = s.tutorial_sunbeam_started
+	founder_placed_milestone = s.founder_placed_milestone
+	trained_founders_milestone = s.trained_founders_milestone
+	buildings = s.buildings
+	stored_buildings = s.stored_buildings
+	construction = s.construction
+	owned_sectors.assign(s.owned_sectors)
+	starter_obstacle = s.starter_obstacle
+	next_building_serial = s.next_building_serial
+	farm_crops = s.farm_crops
+	sample_claimed = s.sample_claimed
+	receipts = s.receipts
+	return true

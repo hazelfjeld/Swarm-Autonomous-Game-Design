@@ -838,14 +838,14 @@ jobs:
       - name: Checkout exact city validation seam (independent input)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 0887136de701d247b23190167cc5854e137fffd7
+          ref: 1a5528b35c957cc9a9183874e8abf4b89a12c499
           path: .arch002-city-source
           persist-credentials: false
       - name: Native city and staged-profile roundtrip (not hosted)
         timeout-minutes: 4
         run: |
           set -euo pipefail
-          test "$(git -C .arch002-city-source rev-parse HEAD)" = "0887136de701d247b23190167cc5854e137fffd7"
+          test "$(git -C .arch002-city-source rev-parse HEAD)" = "1a5528b35c957cc9a9183874e8abf4b89a12c499"
           project="$RUNNER_TEMP/arch002-city-integration"
           mkdir -p "$project"
           cp -a .arch002-city-source/game/city_checkpoint/. "$project/"
@@ -858,3 +858,221 @@ jobs:
           printf 'Architect source %s; city source %s\n' "$(git rev-parse HEAD)" "$(git -C .arch002-city-source rev-parse HEAD)"
           timeout 90s "$editor" --headless --path "$project" --script res://arch002_city_bridge.gd
           timeout 90s "$editor" --headless --path "$project" --script res://arch002_city_session_test.gd
+
+      - name: Export combined acknowledged city (isolated candidate)
+        timeout-minutes: 4
+        run: |
+          set -euo pipefail
+          project="$RUNNER_TEMP/arch002-city-integration"
+          export XDG_DATA_HOME="$RUNNER_TEMP/arch002-city-userdata"
+          editor="$RUNNER_TEMP/arch002-engine/Godot_v4.7.2-stable_linux.x86_64"
+          mkdir -p "$XDG_DATA_HOME/godot/export_templates/4.7.2.stable"
+          cp "$RUNNER_TEMP/arch002-templates/"* "$XDG_DATA_HOME/godot/export_templates/4.7.2.stable/"
+          # Only the disposable integration copy changes; gameplay owns its source.
+          cat > "$project/arch002_city_entry.gd" <<'GD'
+          extends Node
+
+          const Session = preload("res://city_profile_session.gd")
+          const CityScene = preload("res://main.tscn")
+
+          func _ready() -> void:
+              var session = Session.new()
+              session.start_web()
+              var city = CityScene.instantiate()
+              if not city.configure_profile_session(session):
+                  push_error("City persistence injection refused; no session-only fallback.")
+                  return
+              add_child(city)
+          GD
+          cat > "$project/arch002_city_entry.tscn" <<'SCENE'
+          [gd_scene load_steps=2 format=3]
+
+          [ext_resource type="Script" path="res://arch002_city_entry.gd" id="1"]
+
+          [node name="PersistentCity" type="Node"]
+          script = ExtResource("1")
+          SCENE
+          sed -i 's|run/main_scene="res://main.tscn"|run/main_scene="res://arch002_city_entry.tscn"|' "$project/project.godot"
+          grep -Fx 'run/main_scene="res://arch002_city_entry.tscn"' "$project/project.godot"
+          out="$RUNNER_TEMP/arch002-persistent-city"
+          mkdir -p "$out"
+          timeout 90s "$editor" --headless --path "$project" --editor --import
+          timeout 90s "$editor" --headless --path "$project" --export-release Web "$out/index.html"
+          # Classic external script executes synchronously before the generated
+          # engine loader; reuse the exact transport implementation, not a fork.
+          python3 - "$out" <<'PY'
+          import hashlib, json, pathlib, re, subprocess, sys
+          out = pathlib.Path(sys.argv[1])
+          transport = pathlib.Path("spikes/web_delivery/profile_transport.js").read_text()
+          classic, count = re.subn(r"(?m)^export (?=(?:async )?function )", "", transport)
+          assert count == 3 and not re.search(r"(?m)^\s*(?:import|export)\s", classic)
+          (out / "profile-boot.js").write_text(
+              '"use strict";\n' + classic +
+              '\nwindow.littleRayCityProfilePort = createGodotProfilePort(() => openProfileSession("little-ray-city-checkpoint-v2"));\n')
+          index = out / "index.html"
+          html = index.read_text()
+          assert html.count("</head>") == 1 and "profile-boot.js" not in html
+          index.write_text(html.replace("</head>", '<script src="profile-boot.js"></script>\n</head>', 1))
+          files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in out.iterdir() if p.is_file()}
+          assert "index.wasm" in files and "index.pck" in files
+          (out / "integration-manifest.json").write_text(json.dumps({
+              "architect_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "city_commit": subprocess.check_output(["git", "-C", ".arch002-city-source", "rev-parse", "HEAD"], text=True).strip(),
+              "sha256": files, "actual_site_verified": False}, indent=2))
+          PY
+      - name: Exercise real city controls and reload in Chromium
+        timeout-minutes: 4
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, functools, http.server, json, os, pathlib, subprocess
+          import tempfile, threading, time, urllib.request
+
+          root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "arch002-persistent-city"
+          server = http.server.ThreadingHTTPServer(("127.0.0.1", 0),
+              functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root)))
+          threading.Thread(target=server.serve_forever, daemon=True).start()
+          url = f"http://127.0.0.1:{server.server_port}/index.html"
+          driver = subprocess.Popen(["chromedriver", "--port=9516"])
+          session = None
+          evidence = root.parent / "arch002-city-browser-evidence"
+          evidence.mkdir(exist_ok=True)
+          def api(method, path, data=None):
+              req = urllib.request.Request("http://127.0.0.1:9516" + path,
+                  data=None if data is None else json.dumps(data).encode(),
+                  headers={"Content-Type": "application/json"}, method=method)
+              with urllib.request.urlopen(req, timeout=35) as response:
+                  return json.load(response)["value"]
+          def wait(fn, label, seconds=35):
+              end = time.monotonic() + seconds
+              while time.monotonic() < end:
+                  result = fn()
+                  if result:
+                      return result
+                  time.sleep(.15)
+              raise AssertionError("Timed out: " + label)
+          def driver_ready():
+              try:
+                  return api("GET", "/status").get("ready")
+              except OSError:
+                  return False
+          def js(source):
+              return api("POST", session + "/execute/sync", {"script": source, "args": []})
+          def saved():
+              result = api("POST", session + "/execute/async", {"args": [], "script": """
+                const done = arguments[arguments.length - 1];
+                (async () => {
+                  const name = "little-ray-city-checkpoint-v2";
+                  if (!(await indexedDB.databases()).some(x => x.name === name)) return null;
+                  const db = await new Promise((ok, bad) => {
+                    const r = indexedDB.open(name); r.onsuccess = () => ok(r.result);
+                    r.onerror = () => bad(r.error); r.onupgradeneeded = () => r.transaction.abort();
+                  });
+                  try {
+                    return await new Promise((ok, bad) => {
+                      const t = db.transaction("profiles", "readonly");
+                      const a = t.objectStore("profiles").get("active");
+                      const p = t.objectStore("profiles").get("previous");
+                      t.oncomplete = () => ok(a.result === undefined ? null :
+                        {active: JSON.parse(a.result), previous: p.result === undefined ? null : JSON.parse(p.result)});
+                      t.onabort = () => bad(t.error); t.onerror = () => bad(t.error);
+                    });
+                  } finally { db.close(); }
+                })().then(done, e => done({error: String(e)}));
+              """})
+              if result and "error" in result:
+                  raise AssertionError(result)
+              return result
+          def bounds():
+              return js("const c=document.querySelector('canvas'); return c && c.width && !document.getElementById('status') ? c.getBoundingClientRect().toJSON() : null;")
+          def click(x, y):
+              b = wait(bounds, "city canvas")
+              api("POST", session + "/actions", {"actions": [{"type":"pointer","id":"mouse",
+                  "parameters":{"pointerType":"mouse"},"actions":[
+                    {"type":"pointerMove","duration":0,"origin":"viewport",
+                     "x":round(b["x"]+b["width"]*x/1100),"y":round(b["y"]+b["height"]*y/880)},
+                    {"type":"pointerDown","button":0},{"type":"pointerUp","button":0}]}]})
+          def observe(predicate, label, seconds=35):
+              def probe():
+                  pair = saved()
+                  return pair if pair and predicate(pair["active"]["model"]) else None
+              return wait(probe, label, seconds)
+          def next_checkpoint():
+              before = saved()["active"]["storage_revision"]
+              wait(lambda: (saved() or {}).get("active", {}).get("storage_revision", 0) > before,
+                   "fresh acknowledged timer checkpoint", 10)
+              time.sleep(.15)
+          def capture(name):
+              (evidence / (name + ".png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+          try:
+              with tempfile.TemporaryDirectory(prefix="arch002-persistent-city-") as profile:
+                  wait(driver_ready, "ChromeDriver ready", 15)
+                  opened = api("POST", "/session", {"capabilities":{"alwaysMatch":{"browserName":"chrome",
+                      "goog:chromeOptions":{"args":["--headless=new","--window-size=1200,1000",
+                          "--disable-dev-shm-usage","--user-data-dir="+profile]}}}})
+                  session = "/session/" + opened["sessionId"]
+                  api("POST", session + "/timeouts", {"script":10000,"pageLoad":30000})
+                  api("POST", session + "/goog/cdp/execute", {"cmd":"Emulation.setDeviceMetricsOverride",
+                      "params":{"width":1100,"height":880,"deviceScaleFactor":1,"mobile":False}})
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "Godot city loader")
+                  assert js("return typeof window.littleRayCityProfilePort?.begin_open === 'function'")
+                  fresh = observe(lambda m: m["gold"] == 1200 and m["food"] == 240, "initial durable city")
+                  capture("01-initial")
+                  next_checkpoint()
+                  click(910, 480)
+                  planted = observe(lambda m: m["gold"] == 1180 and m["farm_crops"].get("farm-1",{}).get("recipe") == "sprout", "ordinary paid plant")
+                  next_checkpoint()
+                  click(830, 363)
+                  fed = observe(lambda m: m["food"] == 235 and m["individuals"]["ray-1"]["pips"] == 1, "ordinary feed")
+                  capture("02-fed-and-planted")
+                  # Verify positive resident income using real elapsed time, not a grant.
+                  next_checkpoint()
+                  observe(lambda m: m["income_ticks"] >= 240, "resident bin accrual", 45)
+                  next_checkpoint()
+                  click(910, 315)
+                  collected = observe(lambda m: m["gold"] > 1180, "ordinary Gold collection")
+                  assert collected["active"]["model"]["food"] == 235
+                  assert collected["previous"]["storage_revision"] + 1 == collected["active"]["storage_revision"]
+                  capture("03-collected")
+                  api("POST", session + "/refresh", {})
+                  wait(bounds, "city reload")
+                  restored = wait(lambda: (p if (p := saved()) and p["active"]["storage_revision"] > collected["active"]["storage_revision"] else None), "new startup checkpoint")
+                  for key in ("gold", "food", "individuals", "receipts", "farm_crops"):
+                      assert restored["active"]["model"][key] == collected["active"]["model"][key], key
+                  next_checkpoint()
+                  click(830, 363)
+                  after = observe(lambda m: m["food"] == 230 and m["individuals"]["ray-1"]["pips"] == 2, "ordinary feed after reload")
+                  assert len(after["active"]["model"]["receipts"]) == len(collected["active"]["model"]["receipts"]) + 1
+                  capture("04-reloaded-fed")
+                  report = {"persistent_city":"pass","browser":opened["capabilities"].get("browserVersion"),
+                      "manifest":json.loads((root/"integration-manifest.json").read_text()),
+                      "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload"],
+                      "fresh":fresh,"planted":planted,"fed":fed,"collected":collected,"restored":restored,"after":after,
+                      "actual_site_verified":False}
+                  (evidence/"observation.json").write_text(json.dumps(report, indent=2))
+                  print(json.dumps({"persistent_city":"pass","checks":report["checks"],"actual_site_verified":False}), flush=True)
+          finally:
+              if session:
+                  try:
+                      api("DELETE", session)
+                  except Exception as error:
+                      print("Browser cleanup:", error, flush=True)
+              driver.terminate()
+              try:
+                  driver.wait(timeout=10)
+              except subprocess.TimeoutExpired:
+                  driver.kill()
+                  driver.wait()
+              server.shutdown()
+          PY
+      - name: Retain combined city export and browser evidence (not hosted)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: arch002-persistent-city-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/arch002-persistent-city/
+            ${{ runner.temp }}/arch002-city-browser-evidence/
+          if-no-files-found: warn
+          retention-days: 3

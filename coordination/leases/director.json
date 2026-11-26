@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 78,
-  "run_id": "mountain-mover-20261126T0850Z-bridge-verification",
-  "acquired_at": "2026-11-26T08:50:59.039Z",
-  "expires_at": "2026-11-26T09:20:59.039Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

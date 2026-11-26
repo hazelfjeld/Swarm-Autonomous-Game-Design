@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": "architect-20261126061326044-g60-city-bridge",
+  "run_id": null,
   "generation": 60,
-  "acquired_at": "2026-11-26T06:13:26.044Z",
-  "expires_at": "2026-11-26T06:43:26.044Z"
+  "acquired_at": null,
+  "expires_at": null
 }

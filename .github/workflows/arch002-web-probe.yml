@@ -7,6 +7,7 @@ on:
     paths:
       - 'spikes/web_delivery/**'
       - 'tests/arch002_city_bridge.gd'
+      - 'tests/arch002_profile_transport_browser.js'
       - '.github/workflows/arch002-web-probe.yml'
 
 permissions:
@@ -795,6 +796,16 @@ jobs:
                       "observations": ["loader completion", "mouse greeting", "IndexedDB persistence",
                                        "reload and second greeting"],
                       "actual_site_verified": False, "audio_verified": False}), flush=True)
+                  # Independent production-profile transport on real browser IndexedDB.
+                  # Separate database; the diagnostic scene and its save stay untouched.
+                  transport_source = pathlib.Path("spikes/web_delivery/profile_transport.js").read_text()
+                  transport_fixture = pathlib.Path("tests/arch002_profile_transport_browser.js").read_text()
+                  transport_result = api("POST", session + "/execute/async", {
+                      "args": [transport_source], "script": transport_fixture})
+                  (evidence / "profile-transport-observation.json").write_text(json.dumps(transport_result, indent=2))
+                  print(json.dumps(transport_result), flush=True)
+                  assert transport_result.get("profile_transport") == "pass", transport_result
+                  assert len(transport_result.get("checks", [])) == 15, transport_result
                   api("DELETE", session)
                   session = None
           finally:

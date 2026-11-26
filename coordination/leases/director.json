@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 76,
-  "run_id": "mountain-mover-20261126T0744Z-timer-capture",
-  "acquired_at": "2026-11-26T07:45:16.612Z",
-  "expires_at": "2026-11-26T08:15:16.612Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

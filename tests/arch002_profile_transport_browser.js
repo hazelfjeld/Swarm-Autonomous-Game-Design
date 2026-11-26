@@ -2,7 +2,7 @@
 // The first argument is the exact checked-out production candidate module.
 const done = arguments[arguments.length - 1];
 (async () => {
-  const create = new Function(arguments[0].replace("export function", "function") + "\nreturn createProfileTransport;")();
+  const {create, openSession} = new Function(arguments[0].replace(/export (async )?function/g, "$1function") + "\nreturn {create: createProfileTransport, openSession: openProfileSession};")();
   const name = "arch002-profile-transport-fixture-" + crypto.randomUUID();
   const open = () => new Promise((resolve, reject) => {
     const request = indexedDB.open(name, 1);
@@ -136,6 +136,46 @@ const done = arguments[arguments.length - 1];
       check(!pair.ok && pair.active === "damaged" && pair.previous === b, "corrupt active preserved for recovery");
       check(!(await invalid.commit(null, a)).ok, "corrupt profile cannot initialize blank");
     } finally { reopened.close(); }
+
+    // Exercise the actual session wrapper with native Web Locks and IndexedDB.
+    const sessionName = name + "-session";
+    const firstSession = await openSession(sessionName);
+    check(firstSession.status === "ready" && firstSession.initial.status === "missing", "session opens verified empty database");
+    const follower = await openSession(sessionName);
+    check(follower.status === "read-only", "second session cannot acquire writer");
+    check(!(await follower.commit(a)).ok, "read-only session cannot write");
+    check((await firstSession.commit(a)).observed_text === a, "session first commit acknowledges exact bytes");
+    const pending = firstSession.commit(b);
+    check(firstSession.status === "saving", "pending write reports saving");
+    check(!(await firstSession.commit(c)).ok, "overlapping command refused");
+    check(!(await firstSession.close()), "pending session cannot release writer");
+    check((await pending).observed_text === b, "pending write confirms before publication");
+    check(await firstSession.close(), "healthy owner explicitly closes");
+    check(follower.status === "read-only", "follower does not automatically take over");
+    await follower.close();
+    const successor = await openSession(sessionName);
+    check(successor.status === "ready" && successor.initial.active === b &&
+      successor.initial.previous === a, "explicit reopen obtains latest pair");
+    check((await successor.commit(c)).observed_text === c, "successor commits next generation");
+    await successor.close();
+    indexedDB.deleteDatabase(sessionName);
+
+    // Inject only the never-completing open request, using a real writer lock.
+    // This proves timeout and fencing, not a real disk failure.
+    const timeoutName = name + "-timeout";
+    let lateRequest;
+    const stalled = await openSession(timeoutName, {
+      timeoutMs: 100, dbFactory: {open() { lateRequest = {}; return lateRequest; }}
+    });
+    check(stalled.status === "unavailable" && !!lateRequest, "startup timeout fails closed");
+    check(!(await stalled.commit(a)).ok && !(await stalled.close()), "uncertain session refuses write and release");
+    const blocked = await openSession(timeoutName);
+    check(blocked.status === "read-only", "timed out owner retains writer fence");
+    let closedLate = false;
+    lateRequest.result = {close() { closedLate = true; }};
+    lateRequest.onsuccess();
+    check(closedLate && stalled.status === "unavailable", "late open cannot revive timed-out session");
+    await blocked.close();
     return {profile_transport: "pass", checks, actual_site_verified: false};
   } finally {
     other.close();

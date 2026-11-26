@@ -108,3 +108,120 @@ export function createProfileTransport(db) {
   }
   return {read, commit};
 }
+
+// Lifetime browser owner for one profile DB. The game must still validate the
+// domain snapshot before using initial.active, and publish effects only after
+// commit returns the exact acknowledged bytes. This is not the Godot UI seam.
+// On ambiguous I/O the session stays fenced until document destruction/reload.
+export async function openProfileSession(name, {
+  timeoutMs = 5000, locks = globalThis.navigator?.locks,
+  dbFactory = globalThis.indexedDB
+} = {}) {
+  let state = "opening", db = null, transport = null, expected = null;
+  let initial = null, releaseLock, ownerTask;
+  const unavailable = reason => ({ok: false, status: "unavailable", reason});
+  const held = new Promise(resolve => { releaseLock = resolve; });
+  function deadline(promise) {
+    let timer;
+    return Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Storage deadline exceeded.")), timeoutMs);
+    })]).finally(() => clearTimeout(timer));
+  }
+  function fail(reason) {
+    state = "unavailable";
+    return unavailable(reason);
+  }
+  function openDb() {
+    return new Promise((resolve, reject) => {
+      const request = dbFactory.open(name, 1);
+      request.onupgradeneeded = event => {
+        if (state !== "opening" || event.oldVersion !== 0) {
+          request.transaction.abort();
+          return;
+        }
+        request.result.createObjectStore("profiles");
+      };
+      request.onerror = () => reject(new Error("Profile database open failed."));
+      request.onblocked = () => reject(new Error("Profile database open blocked."));
+      request.onsuccess = () => {
+        const opened = request.result;
+        if (state !== "opening") {
+          opened.close();
+          reject(new Error("Late database open ignored."));
+          return;
+        }
+        resolve(opened);
+      };
+    });
+  }
+  const session = {
+    get status() { return state; },
+    get initial() { return initial; },
+    async commit(payload) {
+      if (state !== "ready") return {ok: false, status: state};
+      state = "saving";
+      try {
+        const result = await deadline(transport.commit(expected, payload));
+        if (state !== "saving") return unavailable("Session invalidated; reload to reconcile.");
+        if (!result.ok || result.observed_text !== payload)
+          return fail(result.reason || "Write could not be confirmed; reload to reconcile.");
+        expected = result.observed_text;
+        state = "ready";
+        return result;
+      } catch (_) { return fail("Write outcome unknown; reload to reconcile."); }
+    },
+    async close() {
+      if (state === "closed") return true;
+      // Do not release a writer while an operation may still commit.
+      if (state !== "ready" && state !== "read-only") return false;
+      state = "closed";
+      if (db) db.close();
+      releaseLock();
+      if (ownerTask) await ownerTask;
+      return true;
+    }
+  };
+  if (typeof name !== "string" || !name || !Number.isFinite(timeoutMs) ||
+      timeoutMs <= 0 || !locks || !dbFactory) {
+    fail("Browser writer lock or storage unavailable.");
+    return session;
+  }
+  let ready;
+  const started = new Promise(resolve => { ready = resolve; });
+  try {
+    ownerTask = locks.request("little-ray-profile:" + name,
+      {mode: "exclusive", ifAvailable: true}, async lock => {
+        // A late acquisition after the startup deadline cannot open storage.
+        if (state !== "opening") return;
+        if (!lock) {
+          state = "read-only";
+          ready();
+          return;
+        }
+        try {
+          db = await openDb();
+          if (state !== "opening") { db.close(); return; }
+          db.onversionchange = () => {
+            fail("Profile database changed; reload to reconcile.");
+            db.close();
+          };
+          transport = createProfileTransport(db);
+          const result = await transport.read();
+          if (state !== "opening") return;
+          initial = result;
+          if (result.ok) {
+            expected = result.active;
+            state = "ready";
+          } else fail(result.reason || "Profile read failed.");
+        } catch (_) { fail("Profile database unavailable."); }
+        finally { ready(); }
+        // Even after a failed read/write, preserve ownership until reload.
+        await held;
+      }).catch(() => {
+        if (state !== "closed") fail("Writer lock unavailable.");
+        ready();
+      });
+    await deadline(started);
+  } catch (_) { fail("Profile session startup deadline exceeded."); }
+  return session;
+}

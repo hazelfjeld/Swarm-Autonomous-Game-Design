@@ -950,7 +950,7 @@ jobs:
               backup_text.size = Vector2(900, 355)
               backup_text.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
               backup_text.placeholder_text = "Exported or pasted portable city JSON"
-              backup_text.text_changed.connect(invalidate_backup_preview)
+              backup_text.text_changed.connect(backup_input_changed)
               backup_panel.add_child(backup_text)
               backup_message = Label.new()
               backup_message.position = Vector2(100, 585)
@@ -990,6 +990,12 @@ jobs:
               invalidate_backup_preview()
               backup_text.grab_focus()
 
+          func backup_input_changed() -> void:
+              # A programmatic export may emit a deferred text_changed signal.
+              # Only invalidate a live preview; do not overwrite export feedback.
+              if not backup_confirmation.is_empty():
+                  invalidate_backup_preview()
+
           func invalidate_backup_preview() -> void:
               backup_confirmation = ""
               backup_restore.disabled = true
@@ -1024,6 +1030,9 @@ jobs:
               if not session.stage_restore(backup_text.text, token, int(Time.get_unix_time_from_system() * 1000.0)):
                   city.update_profile_display()
                   backup_message.text = "Replacement not queued. Preview again or reload if storage is unavailable."
+                  if session.status() != "ready":
+                      backup_export.disabled = true
+                      backup_preview.disabled = true
                   return
               # Explicit replacement starts a new local elapsed sample. On cancel,
               # the old sample is unchanged, so the next tick settles time spent here.

@@ -6,6 +6,7 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - 'spikes/web_delivery/**'
+      - 'tests/arch002_city_bridge.gd'
       - '.github/workflows/arch002-web-probe.yml'
 
 permissions:
@@ -818,3 +819,26 @@ jobs:
           path: ${{ runner.temp }}/arch002-browser-evidence/
           if-no-files-found: warn
           retention-days: 3
+
+      # Read-only pinned input from the independent gameplay task. The
+      # integration project lives outside both source checkouts.
+      - name: Checkout exact city validation seam (independent input)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 7f6cca177e02245542c63f7b27fd7c8755a9654a
+          path: .arch002-city-source
+          persist-credentials: false
+      - name: Native city and staged-profile roundtrip (not hosted)
+        timeout-minutes: 4
+        run: |
+          set -euo pipefail
+          test "$(git -C .arch002-city-source rev-parse HEAD)" = "7f6cca177e02245542c63f7b27fd7c8755a9654a"
+          project="$RUNNER_TEMP/arch002-city-integration"
+          mkdir -p "$project"
+          cp -a .arch002-city-source/game/city_checkpoint/. "$project/"
+          cp spikes/web_delivery/profile_commit.gd "$project/"
+          cp tests/arch002_city_bridge.gd "$project/"
+          export XDG_DATA_HOME="$RUNNER_TEMP/arch002-city-userdata"
+          editor="$RUNNER_TEMP/arch002-engine/Godot_v4.7.2-stable_linux.x86_64"
+          printf 'Architect source %s; city source %s\n' "$(git rev-parse HEAD)" "$(git -C .arch002-city-source rev-parse HEAD)"
+          timeout 90s "$editor" --headless --path "$project" --script res://arch002_city_bridge.gd

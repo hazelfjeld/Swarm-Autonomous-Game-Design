@@ -39,7 +39,13 @@ export function createProfileTransport(db) {
       const store = tx.objectStore(storeName);
       const active = store.get("active");
       const previous = store.get("previous");
-      tx.oncomplete = () => resolve({active: active.result, previous: previous.result});
+      const activeKey = store.getKey("active");
+      const previousKey = store.getKey("previous");
+      tx.oncomplete = () => resolve({
+        active: active.result, previous: previous.result,
+        activePresent: activeKey.result !== undefined,
+        previousPresent: previousKey.result !== undefined
+      });
       tx.onabort = () => reject(new Error("read aborted"));
       tx.onerror = () => reject(new Error("read failed"));
     });
@@ -53,9 +59,11 @@ export function createProfileTransport(db) {
     busy = true;
     try {
       const pair = await readPair();
-      if (pair.active === undefined && pair.previous === undefined)
+      if (!pair.activePresent && !pair.previousPresent)
         return {ok: true, status: "missing", active: null, previous: null};
-      if (!validPair(pair.active, pair.previous))
+      if ((pair.activePresent && pair.active === undefined) ||
+          (pair.previousPresent && pair.previous === undefined) ||
+          !validPair(pair.active, pair.previous))
         return {...failure("Invalid or orphaned profile; preserve both records."), ...pair};
       return {ok: true, status: "ready", active: pair.active, previous: pair.previous ?? null};
     } catch (_) { return failure("Could not read profile."); }
@@ -81,15 +89,20 @@ export function createProfileTransport(db) {
         let applied = false;
         const active = store.get("active");
         const previous = store.get("previous");
+        const activeKey = store.getKey("active");
+        const previousKey = store.getKey("previous");
         tx.oncomplete = () => resolve(applied);
         tx.onabort = () => reject(new Error("write aborted"));
         tx.onerror = () => reject(new Error("write failed"));
-        // Both reads are queued in this same transaction. The second success
-        // callback can compare and enqueue both writes before auto-commit.
-        previous.onsuccess = () => {
+        // Values and key presence are read in the same transaction. The last
+        // request callback compares and enqueues both writes before auto-commit.
+        previousKey.onsuccess = () => {
           const actual = active.result;
-          if (expected === null ? actual !== undefined || previous.result !== undefined : actual !== expected) return;
-          if (expected !== null && !validPair(actual, previous.result)) return;
+          const activePresent = activeKey.result !== undefined;
+          const previousPresent = previousKey.result !== undefined;
+          if (expected === null ? activePresent || previousPresent : !activePresent || actual !== expected) return;
+          if (expected !== null && ((previousPresent && previous.result === undefined) ||
+              !validPair(actual, previous.result))) return;
           try {
             if (expected !== null) store.put(expected, "previous");
             store.put(payload, "active");
@@ -99,7 +112,8 @@ export function createProfileTransport(db) {
       });
       if (!changed) return failure("Storage conflict or invalid previous copy; reload to reconcile.");
       const observed = await readPair();
-      if (observed.active !== payload ||
+      if (!observed.activePresent || observed.previousPresent !== (expected !== null) ||
+          observed.active !== payload ||
           observed.previous !== (expected === null ? undefined : expected))
         return failure("Committed bytes could not be confirmed; reload to reconcile.");
       return {ok: true, status: "saved", storage_revision: next.storage_revision, observed_text: observed.active};

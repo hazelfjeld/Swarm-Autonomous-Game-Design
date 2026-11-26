@@ -49,6 +49,7 @@ const done = arguments[arguments.length - 1];
             const s = tx.objectStore(name);
             return {
               get: key => s.get(key),
+              getKey: key => s.getKey(key),
               put(value, key) {
                 const request = s.put(value, key);
                 if (key === "active") request.addEventListener("success", () => {
@@ -122,6 +123,37 @@ const done = arguments[arguments.length - 1];
         const raw = await rawPair();
         check(raw[0] === active && raw[1] === previous,
           label + ": both records preserved");
+      }
+      await injectPair(winner, b);
+      // get() alone cannot distinguish an absent key from stored undefined.
+      // Corruption must not be mistaken for a fresh profile or repaired on write.
+      for (const [label, entries, expected, next] of [
+        ["undefined active", [["active", undefined]], null, a],
+        ["undefined previous", [["previous", undefined]], null, a],
+        ["both undefined", [["active", undefined], ["previous", undefined]], null, a],
+        ["undefined predecessor", [["active", a], ["previous", undefined]], a, b]
+      ]) {
+        await new Promise((resolve, reject) => {
+          const tx = reopened.transaction("profiles", "readwrite");
+          const s = tx.objectStore("profiles");
+          s.clear();
+          for (const [key, value] of entries) s.put(value, key);
+          tx.oncomplete = resolve;
+          tx.onabort = tx.onerror = reject;
+        });
+        check(!(await create(reopened).read()).ok, label + ": read refused");
+        check(!(await create(reopened).commit(expected, next)).ok, label + ": write refused");
+        const observed = await new Promise((resolve, reject) => {
+          const tx = reopened.transaction("profiles", "readonly");
+          const s = tx.objectStore("profiles");
+          const keys = s.getAllKeys(), active = s.get("active"), previous = s.get("previous");
+          tx.oncomplete = () => resolve([keys.result, active.result, previous.result]);
+          tx.onabort = tx.onerror = reject;
+        });
+        const wanted = new Map(entries);
+        check(observed[0].length === wanted.size && observed[0].every(k => wanted.has(k)) &&
+          observed[1] === wanted.get("active") && observed[2] === wanted.get("previous"),
+          label + ": all existing keys/values preserved");
       }
       await injectPair(winner, b);
       // Corrupt the active record deliberately in the test database only.

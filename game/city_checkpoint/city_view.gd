@@ -22,6 +22,9 @@ var profile_overlay_text: Label
 var profile_pending_kind: String = ""
 var profile_pending_placement: Vector2i = Vector2i.ZERO
 const PROFILE_TICK_MS: int = 1000
+# The elapsed sample and the next background-write deadline are distinct.
+# A slow acknowledgement must not consume the next interactive ready window.
+var profile_ready_since_ms: int = 0
 var last_ms: int = 0
 var op_count: int = 0
 var status_label: Label
@@ -599,6 +602,7 @@ func process_profile(now: int, wall_ms: int) -> void:
 				return
 			var first_confirmation: bool = not profile_confirmed
 			profile_confirmed = true
+			profile_ready_since_ms = now
 			var result: Dictionary = profile_session.last_result()
 			var rename_confirmed: bool = profile_pending_kind == "rename"
 			if not profile_pending_kind.is_empty():
@@ -611,7 +615,9 @@ func process_profile(now: int, wall_ms: int) -> void:
 				name_edit.text = str(city.individuals[selected_ray]["nickname"])
 		update_profile_display()
 		return
-	if before == "ready" and profile_confirmed and now - last_ms >= PROFILE_TICK_MS:
+	# Give ordinary controls a full ready interval after each confirmation.
+	# Preserve the complete elapsed sample (including acknowledgement latency).
+	if before == "ready" and profile_confirmed and now - profile_ready_since_ms >= PROFILE_TICK_MS and now - last_ms >= PROFILE_TICK_MS:
 		if profile_session.stage_tick(maxi(0, now - last_ms), wall_ms):
 			last_ms = now
 	update_profile_display()
@@ -1402,7 +1408,7 @@ func capture_fixture(directory: String) -> void:
 		push_error("Acknowledged profile view fixture failed")
 		get_tree().quit(1)
 		return
-	print("CITY_PROFILE_VIEW_PASS: startup hidden until acknowledgement, restored operation ID, no speculative feed or overlap, retained pending elapsed, uncertain save freezes confirmed view")
+	print("CITY_PROFILE_VIEW_PASS: startup hidden until acknowledgement, restored operation ID, no speculative feed or overlap, retained pending elapsed, slow acknowledgement leaves a ready interval, uncertain save freezes confirmed view")
 	get_tree().quit(0)
 
 # CI-only interface double: actual city model, controlled acknowledgement.
@@ -1510,13 +1516,18 @@ func profile_view_fixture() -> bool:
 	view.process_profile(staged_at + 1100, wall + 1100)
 	good = good and view.city.food == food_before - cost and view.city.receipts.has("ui-1001") and view.profile_footer.text.begins_with("Saved")
 	var acknowledged: Dictionary = view.city.snapshot()
+	# A slow acknowledgement must not trigger an immediate background write.
 	view.process_profile(staged_at + 1100, wall + 1100)
-	good = good and session.phase == "saving" and session.elapsed_sample == 1100 and view.city.snapshot() == acknowledged
+	good = good and session.phase == "ready" and view.city.snapshot() == acknowledged
+	view.process_profile(staged_at + 2099, wall + 2099)
+	good = good and session.phase == "ready" and view.last_ms == staged_at and view.city.snapshot() == acknowledged
+	view.process_profile(staged_at + 2100, wall + 2100)
+	good = good and session.phase == "saving" and session.elapsed_sample == 2100 and view.city.snapshot() == acknowledged
 	# An uncertain write must retain the old acknowledged model and prevent
 	# additional commands. The standalone memory adapter must remain unused.
 	session.phase = "unavailable"
 	session.result = {"ok": false, "message": "Save unavailable. Reload to reconcile."}
-	view.process_profile(staged_at + 1200, wall + 1200)
+	view.process_profile(staged_at + 2200, wall + 2200)
 	view.act("feed", "ray-1")
 	good = good and view.profile_overlay.visible and view.city.snapshot() == acknowledged and session.command_count == 1 and view.adapter.last_snapshot.is_empty()
 	view.free()

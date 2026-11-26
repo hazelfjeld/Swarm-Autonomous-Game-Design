@@ -4,6 +4,7 @@ extends SceneTree
 const City = preload("res://city_model.gd")
 const Commit = preload("res://profile_commit.gd")
 var checks := 0
+var completed := false
 var failures: Array[String] = []
 
 func _check(condition: bool, label: String) -> void:
@@ -16,6 +17,7 @@ func _valid_city(raw: Dictionary) -> bool:
 
 func _initialize() -> void:
 	_run()
+	_check(completed and checks == 20, "all bridge scenarios reached")
 	print(JSON.stringify({"city_profile_bridge": "pass" if failures.is_empty() else "fail", "checks": checks, "failures": failures}))
 	quit(0 if failures.is_empty() else 1)
 
@@ -90,3 +92,4 @@ func _run() -> void:
 	var rejected := Commit.new(_valid_city)
 	_check(not rejected.initialize_from_text(JSON.stringify(malformed)) and rejected.status() == "unavailable", "domain-invalid envelope fails closed")
 	_check(not rejected.initialize(baseline, 0, marker), "failed recovery cannot silently reset")
+	completed = true

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 103,
-  "run_id": "mountain-mover-20261126T2147Z-backup-artifact",
-  "acquired_at": "2026-11-26T21:47:12.000Z",
-  "expires_at": "2026-11-26T22:17:12.000Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": "architect-20261126T0307Z-profile-adapter-11",
+  "run_id": null,
   "generation": 57,
-  "acquired_at": "2026-11-26T03:06:56.087Z",
-  "expires_at": "2026-11-26T03:36:56.087Z"
+  "acquired_at": null,
+  "expires_at": null
 }

@@ -250,5 +250,6 @@ func stage_restore(encoded: String, confirmation: String, observed_wall_ms: int)
 	candidate.revision = prior_revision + 1
 	if not _valid_city(candidate):
 		return false
-	var marker: int = maxi(maxi(int(committed.wall_marker_ms), int(decoded.wall_marker_ms)), observed_wall_ms)
+	# A portable backup carries a domain timeline, not another device's wall-clock high-water mark.
+	var marker: int = maxi(int(committed.wall_marker_ms), observed_wall_ms)
 	return _stage(candidate, marker, {"ok": true, "message": "Backup restored."})

@@ -13,7 +13,7 @@ GDD status is **received**, not proof of approved numerical tuning, production a
 | Artifact | Bytes | SHA-256 | Git blob SHA |
 | --- | ---: | --- | --- |
 | [Full v2.1 Markdown](GDD.md) | 102,269 | `55d43ab2e48073ee555cf521981ea7ca9b9311fc7517d12989566ce75c884005` | `602197d618fa183789f1e3e7e0c2a8b3afc2ec03` |
-| [Full v2.1 Word companion](source/Little_Ray_GDD_v2.1.docx) | 394,751 | `f2a8fd83d590e6e7a700b450166842ea64820233f459470e211b3944112812c5` | `1b007f190254c15f33ab38e2caac6a16ab1e2400` |
+| [Full v2.1 Word companion](source/Little_Ray_GDD_v2.1.docx) | 400,417 | `4989451b520ef4a844c6fcc0283ba99ab23d8409e9f1fe4b9d57fef88e6e1441` | `f4f5e87f6ef81b74fb3fa5dadc58c0e67fba03ed` |
 | [Creative-direction charter](CREATIVE_DIRECTION.md) | See Git object | Verify against exact reviewed commit | See exact reviewed commit |
 
 The v2.1 hashes were computed from the fetched canonical Markdown and the GitHub-stored Word bytes. DOCX ZIP parts used uncompressed ZIP entries, which permits independent part/CRC checks but differs from the original v2.0 package compression. No visual page-render pass is claimed.
@@ -50,3 +50,8 @@ Subsequent approved changes (including DIRECTOR-003) must update the source poin
 ## Word link correction — 25 November 2026
 
 Independent QA on PR #28 identified four external relationships (rId5–rId8) targeting the wrong sibling path. All four now target the exact reviewed creative charter at [commit 691d3be3caf4](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/blob/691d3be3caf4f345fb14652122b4a3c3bd8dba08/docs/design/CREATIVE_DIRECTION.md); the immutable URL is usable before and after integration. The charter itself is unchanged. Rebuilt only the stored ZIP relationship entry and ZIP metadata; all eight other package entries are byte-identical, all nine CRCs and central directory checks pass, and the original input SHA-256 matched the previous record. Updated the Word digest, byte count and blob above. The new draft still needs actual Word hyperlink-click and full page-layout inspection; no local render or final acceptance is claimed.
+
+
+## Pagination correction — 26 November 2026 (QA-FIX-005 #40)
+
+At previous exact head `f31befda8559b97709640e4f3ace2aa51a607d44`, independent QA observed sparse overflow pages, continued tables without headers and split task rows. This candidate changes only Word layout: retain first chapter page break after cover, remove 19 subsequent forced chapter breaks, retain Heading1 keep-with-next, repeat all 20 table headers and set cantSplit on all 186 rows. Connector-side stored ZIP checks passed 9/9 local/central CRC and size checks, input SHA-256 matched, original ZIP round-tripped byte-for-byte, reversing only the formatting insertions/removals exactly reproduces original document.xml, and the other eight entries (including relationships) are byte-identical by SHA-256. 13 hyperlinks remain. New Word SHA-256 `4989451b520ef4a844c6fcc0283ba99ab23d8409e9f1fe4b9d57fef88e6e1441`, 400417 bytes, blob `f4f5e87f6ef81b74fb3fa5dadc58c0e67fba03ed`. No Markdown GDD, archived source, mechanics, or link destination change. Exact-head CI render and independent page inspection (including row fit and overflow) remain required; interactive Word links not tested. This is a correction candidate, not document acceptance.

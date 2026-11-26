@@ -44,6 +44,32 @@ func initialize(snapshot: Dictionary, storage_revision: int, wall_marker_ms: int
 	_status = "ready"
 	return true
 
+## Restore only from actual persisted bytes read by the transport. Missing or
+## unreadable storage must not be represented by empty text as a fresh profile.
+## A failed read/validation permanently closes this instance to fresh writes;
+## explicit recovery must use a new instance and independently reconciled bytes.
+## This parses the provisional internal envelope, not a user backup migration.
+func initialize_from_text(observed_text: String) -> bool:
+	if _status != "uninitialized":
+		return false
+	var parser := JSON.new()
+	if parser.parse(observed_text) != OK:
+		_status = "unavailable"
+		return false
+	var raw: Variant = parser.data
+	if not raw is Dictionary or raw.size() != 3 or not raw.has_all(["storage_revision", "wall_marker_ms", "model"]):
+		_status = "unavailable"
+		return false
+	# Check JSON number types/ranges before conversion; never coerce text,
+	# fractional values, negative markers or overflowing generations.
+	if not _whole(raw.storage_revision) or not _whole(raw.wall_marker_ms):
+		_status = "unavailable"
+		return false
+	if not raw.model is Dictionary or not initialize(raw.model, int(raw.storage_revision), int(raw.wall_marker_ms)):
+		_status = "unavailable"
+		return false
+	return true
+
 func status() -> String:
 	return _status
 

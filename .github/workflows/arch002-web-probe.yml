@@ -942,14 +942,14 @@ jobs:
               backup_panel.add_child(heading)
               backup_help = Label.new()
               backup_help.text = "Export JSON and copy it somewhere safe. Paste a backup and preview it.\nReplacement keeps your last confirmed city as a recovery copy."
-              backup_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+              backup_help.autowrap_mode = TextServer.AUTOWRAP_OFF
               backup_help.add_theme_font_size_override("font_size", 18)
               backup_panel.add_child(backup_help)
               backup_help.position = Vector2(100, 145)
               backup_help.size = Vector2(900, 62)
               backup_text = TextEdit.new()
-              backup_text.position = Vector2(100, 215)
-              backup_text.size = Vector2(900, 355)
+              backup_text.position = Vector2(100, 235)
+              backup_text.size = Vector2(900, 335)
               backup_text.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
               backup_text.placeholder_text = "Exported or pasted portable city JSON"
               backup_text.text_changed.connect(backup_input_changed)
@@ -1100,6 +1100,7 @@ jobs:
                   "backup_restore_disabled": backup_restore.disabled,
                   "backup_help_bounds_ok": backup_panel.get_global_rect().encloses(backup_help.get_global_rect()) and backup_help.get_global_rect().end.y <= backup_text.get_global_rect().position.y,
                   "backup_message_bounds_ok": backup_panel.get_global_rect().encloses(backup_message.get_global_rect()) and backup_message.get_global_rect().end.y <= backup_restore.get_global_rect().position.y,
+                  "backup_layout_rects": {"panel": str(backup_panel.get_global_rect()), "help": str(backup_help.get_global_rect()), "help_minimum": str(backup_help.get_combined_minimum_size()), "input": str(backup_text.get_global_rect()), "message": str(backup_message.get_global_rect()), "message_minimum": str(backup_message.get_combined_minimum_size()), "confirm": str(backup_restore.get_global_rect())},
                   "downs": downs, "presses": presses,
                   "disabled": {"plant": city.plant_short.disabled, "feed": city.feed_button.disabled, "collect": city.collect_button.disabled, "harvest": city.harvest_button.disabled, "backup": backup_button.disabled},
                   "rects": {"plant": str(city.plant_short.get_global_rect()), "feed": str(city.feed_button.get_global_rect()), "collect": str(city.collect_button.get_global_rect()), "harvest": str(city.harvest_button.get_global_rect())},
@@ -1322,8 +1323,8 @@ jobs:
                   wait(lambda: not view()["backup_restore_disabled"] and view()["backup_message"].startswith("Replace current city"), "validated backup preview")
                   assert saved()["active"] == before_restore, "preview mutated durable city"
                   preview_layout = view()
-                  assert preview_layout["backup_help_bounds_ok"], "backup help extends outside modal or overlaps input"
-                  assert preview_layout["backup_message_bounds_ok"], "backup status extends outside modal or overlaps actions"
+                  assert preview_layout["backup_help_bounds_ok"], ("backup help extends outside modal or overlaps input", preview_layout["backup_layout_rects"])
+                  assert preview_layout["backup_message_bounds_ok"], ("backup status extends outside modal or overlaps actions", preview_layout["backup_layout_rects"])
                   capture("08-city-backup-preview")
                   modal_click(660, 705)
                   wait(lambda: view()["backup_message"] == "Backup restored." and view()["phase"] == "ready", "confirmed replacement")
@@ -1353,7 +1354,7 @@ jobs:
                       "before_harvest":before_harvest,"harvested":harvested,"harvest_reloaded":final,
                       "backup_exported":exported,"backup_before_restore":before_restore,"backup_replacement":replacement,
                       "backup_reloaded":backup_reloaded,"post_backup_feed":post_backup_feed,
-                      "backup_preview_layout":{"help_bounds_ok":preview_layout["backup_help_bounds_ok"],"message_bounds_ok":preview_layout["backup_message_bounds_ok"]},
+                      "backup_preview_layout":{"help_bounds_ok":preview_layout["backup_help_bounds_ok"],"message_bounds_ok":preview_layout["backup_message_bounds_ok"],"rects":preview_layout["backup_layout_rects"]},
                       "actual_site_verified":False}
                   (evidence/"observation.json").write_text(json.dumps(report, indent=2))
                   print(json.dumps({"persistent_city":"pass","checks":report["checks"],"actual_site_verified":False}), flush=True)

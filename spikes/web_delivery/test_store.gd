@@ -3,9 +3,11 @@ extends SceneTree
 const State = preload("res://probe_state.gd")
 const Store = preload("res://probe_store.gd")
 const TimerState = preload("res://probe_timer.gd")
+const ProfileCommit = preload("res://profile_commit.gd")
 var failures: Array[String] = []
 
 func _initialize() -> void:
+	_profile_commit_tests()
 	var root := "user://test_%s" % Time.get_ticks_usec()
 	DirAccess.make_dir_recursive_absolute(root)
 	var path := root + "/probe.json"
@@ -93,3 +95,61 @@ func _save_current(store: Store, candidate: Dictionary) -> Dictionary:
 func _check(ok: bool, description: String) -> void:
 	if not ok:
 		failures.append(description)
+
+## Domain fixture only; the real city owns its complete validator and restore.
+func _valid_profile_fixture(value: Dictionary) -> bool:
+	return value.get("gold") is int and int(value.gold) >= 0 and value.get("receipts") is Dictionary
+
+func _profile_commit_tests() -> void:
+	var marker := 1700000000000
+	var snapshot := {"revision": 7, "gold": 1200, "receipts": {"ui-1": "collect"}}
+	var commit := ProfileCommit.new(_valid_profile_fixture)
+	_check(not commit.begin(snapshot, 0, marker).ok, "uninitialized profile refuses writes")
+	_check(not commit.initialize({"revision": 7, "gold": -1}, 0, marker), "invalid initial model refused")
+	_check(commit.initialize(snapshot, 12, marker), "validated profile initialized")
+	_check(not commit.initialize(snapshot, 0, marker), "cannot reinitialize live commit boundary")
+	snapshot.gold = 1
+	_check(commit.committed().model.gold == 1200, "initial snapshot copied")
+	var detached := commit.committed()
+	detached.model.receipts.clear()
+	_check(commit.committed().model.receipts.has("ui-1"), "read projection detached")
+	var rollback := ProfileCommit.offline_budget(marker, marker - 1000)
+	_check(rollback.ok and rollback.elapsed_ms == 0 and rollback.wall_marker_ms == marker, "clock rollback retains high-water marker")
+	var twelve := ProfileCommit.offline_budget(marker, marker + 43200000)
+	_check(twelve.ok and twelve.elapsed_ms == 43200000, "twelve-hour offline gap supported")
+	var capped := ProfileCommit.offline_budget(marker, marker + 1209600000)
+	_check(capped.ok and capped.elapsed_ms == 604800000 and capped.wall_marker_ms == marker + 1209600000, "seven-day gap cap discards excess")
+	_check(ProfileCommit.offline_budget(capped.wall_marker_ms, capped.wall_marker_ms).elapsed_ms == 0, "same resume cannot credit elapsed twice")
+	_check(not ProfileCommit.offline_budget(-1, marker).ok, "invalid clock rejected")
+	var candidate: Dictionary = commit.committed().model
+	candidate.gold = 1210
+	_check(not commit.begin(candidate, 11, marker).ok, "stale storage revision refused")
+	_check(not commit.begin(candidate, 12, marker - 1).ok, "wall marker cannot regress")
+	candidate.revision = 6
+	_check(not commit.begin(candidate, 12, marker).ok, "domain revision cannot regress")
+	candidate.revision = 7
+	candidate.gold = -1
+	_check(not commit.begin(candidate, 12, marker).ok, "invalid candidate refused")
+	candidate.gold = 1210
+	var first := commit.begin(candidate, 12, marker + 1000)
+	_check(first.ok and first.storage_revision == 13 and commit.status() == "saving", "time-only checkpoint has separate storage generation")
+	_check(commit.committed().model.gold == 1200, "pending candidate not published")
+	candidate.gold = 999
+	_check(not commit.begin(candidate, 12, marker + 1000).ok, "concurrent stage refused")
+	_check(not commit.confirm(12, first.payload) and commit.status() == "saving", "stale confirmation ignored")
+	_check(not commit.mark_unknown(12) and commit.status() == "saving", "stale failure ignored")
+	_check(commit.confirm(13, first.payload) and commit.status() == "ready", "exact observed payload confirms")
+	_check(commit.committed().model.gold == 1210 and commit.committed().model.revision == 7 and commit.committed().wall_marker_ms == marker + 1000, "confirmed snapshot and clock published atomically")
+	_check(not commit.confirm(13, first.payload), "duplicate confirmation ignored")
+	candidate = commit.committed().model
+	candidate.revision = 8
+	candidate.gold = 1190
+	var second := commit.begin(candidate, 13, marker + 2000)
+	_check(second.ok and not commit.confirm(14, first.payload) and commit.status() == "unavailable", "mismatched active bytes fail closed")
+	_check(commit.committed().storage_revision == 13 and commit.committed().model.gold == 1210, "unknown write retains last confirmed projection")
+	_check(not commit.begin(candidate, 13, marker + 2000).ok and not commit.confirm(14, second.payload), "unknown outcome requires explicit reconciliation")
+	var recovered := ProfileCommit.new(_valid_profile_fixture)
+	_check(recovered.initialize(candidate, 14, marker + 2000), "explicit reconciled read starts new boundary")
+	var third := recovered.begin(candidate, 14, marker + 3000)
+	_check(third.ok and recovered.mark_unknown(15) and recovered.status() == "unavailable", "timeout/refusal locks further writes")
+	_check(recovered.committed().storage_revision == 14, "timeout does not claim new generation committed")

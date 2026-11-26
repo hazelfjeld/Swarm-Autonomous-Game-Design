@@ -878,8 +878,18 @@ jobs:
           var city: Variant
           var session: Variant
           var diagnostic_window: Variant
-          var presses: Dictionary = {"plant": 0, "feed": 0, "collect": 0, "harvest": 0}
-          var downs: Dictionary = {"plant": 0, "feed": 0, "collect": 0, "harvest": 0}
+          var presses: Dictionary = {"plant": 0, "feed": 0, "collect": 0, "harvest": 0, "backup": 0}
+          var downs: Dictionary = {"plant": 0, "feed": 0, "collect": 0, "harvest": 0, "backup": 0}
+          var backup_button: Button
+          var backup_panel: ColorRect
+          var backup_text: TextEdit
+          var backup_message: Label
+          var backup_export: Button
+          var backup_preview: Button
+          var backup_restore: Button
+          var backup_close: Button
+          var backup_confirmation: String = ""
+          var restore_pending: bool = false
 
           func _ready() -> void:
               session = Session.new()
@@ -889,6 +899,7 @@ jobs:
                   push_error("City persistence injection refused; no session-only fallback.")
                   return
               add_child(city)
+              setup_backup_ui()
               # Read-only CI diagnostics, opt-in on the isolated export.
               # No command injection, clock acceleration or persistence override.
               if OS.has_feature("web") and JavaScriptBridge.eval("new URLSearchParams(location.search).get('arch002_test') === '1'"):
@@ -901,6 +912,160 @@ jobs:
                   city.feed_button.pressed.connect(mark_pressed.bind("feed"))
                   city.collect_button.pressed.connect(mark_pressed.bind("collect"))
                   city.harvest_button.pressed.connect(mark_pressed.bind("harvest"))
+                  backup_button.button_down.connect(mark_down.bind("backup"))
+                  backup_button.pressed.connect(mark_pressed.bind("backup"))
+
+          # Isolated integration controls; gameplay's pinned source is untouched.
+          # The full-screen modal suspends normal command processing while a preview
+          # is outstanding. It never permits a restore before exact acknowledgement.
+          func setup_backup_ui() -> void:
+              backup_button = Button.new()
+              backup_button.text = "City backup / restore"
+              backup_button.position = Vector2(800, 607)
+              backup_button.size = Vector2(268, 44)
+              backup_button.disabled = true
+              backup_button.pressed.connect(open_backup)
+              city.add_child(backup_button)
+
+              var layer := CanvasLayer.new()
+              add_child(layer)
+              backup_panel = ColorRect.new()
+              backup_panel.color = Color("#183d4b")
+              backup_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+              layer.add_child(backup_panel)
+              backup_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+              var heading := Label.new()
+              heading.text = "CITY BACKUP  /  Restore saved progress"
+              heading.position = Vector2(100, 95)
+              heading.add_theme_font_size_override("font_size", 30)
+              backup_panel.add_child(heading)
+              var help := Label.new()
+              help.text = "Export confirmed JSON, then copy it somewhere safe. Paste a backup here and preview before replacing your city. The last confirmed city is retained as previous-good."
+              help.position = Vector2(100, 145)
+              help.size = Vector2(900, 62)
+              help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+              backup_panel.add_child(help)
+              backup_text = TextEdit.new()
+              backup_text.position = Vector2(100, 215)
+              backup_text.size = Vector2(900, 355)
+              backup_text.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+              backup_text.placeholder_text = "Exported or pasted portable city JSON"
+              backup_text.text_changed.connect(invalidate_backup_preview)
+              backup_panel.add_child(backup_text)
+              backup_message = Label.new()
+              backup_message.position = Vector2(100, 585)
+              backup_message.size = Vector2(900, 80)
+              backup_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+              backup_message.add_theme_font_size_override("font_size", 18)
+              backup_panel.add_child(backup_message)
+              backup_export = backup_control("Export to text", 100, export_backup_text)
+              backup_preview = backup_control("Preview import", 330, preview_backup_text)
+              backup_restore = backup_control("Confirm replacement", 560, restore_backup_text)
+              backup_close = backup_control("Back to city", 790, close_backup)
+              backup_restore.disabled = true
+              backup_panel.hide()
+
+          func backup_control(label: String, x: int, action: Callable) -> Button:
+              var button := Button.new()
+              button.text = label
+              button.position = Vector2(x, 680)
+              button.size = Vector2(210, 52)
+              button.add_theme_font_size_override("font_size", 17)
+              button.pressed.connect(action)
+              backup_panel.add_child(button)
+              return button
+
+          func open_backup() -> void:
+              if session.status() != "ready" or not city.profile_confirmed or city.profile_view_invalid:
+                  return
+              var focus := get_viewport().gui_get_focus_owner()
+              if focus != null:
+                  focus.release_focus()
+              city.process_mode = Node.PROCESS_MODE_DISABLED
+              backup_panel.show()
+              backup_text.editable = true
+              backup_export.disabled = false
+              backup_preview.disabled = false
+              backup_close.disabled = false
+              invalidate_backup_preview()
+              backup_text.grab_focus()
+
+          func invalidate_backup_preview() -> void:
+              backup_confirmation = ""
+              backup_restore.disabled = true
+              if not restore_pending:
+                  backup_message.text = "Preview is required before replacement."
+
+          func export_backup_text() -> void:
+              var encoded: String = session.export_backup()
+              invalidate_backup_preview()
+              if encoded.is_empty():
+                  backup_message.text = "No confirmed backup available."
+                  return
+              backup_text.text = encoded
+              backup_message.text = "Confirmed backup exported to text. Select and copy it somewhere safe."
+
+          func preview_backup_text() -> void:
+              invalidate_backup_preview()
+              var result: Dictionary = session.preview_backup(backup_text.text)
+              if not result.get("ok", false):
+                  backup_message.text = str(result.get("reason", "Invalid backup."))
+                  return
+              backup_confirmation = str(result.get("confirmation", ""))
+              backup_restore.disabled = backup_confirmation.is_empty()
+              backup_message.text = "Replace current city with: %d Gold, %d Food, %d XP, %d rays (revision %d)? This replaces progress; the previous save is retained." % [result.gold, result.food, result.xp, result.individual_count, result.domain_revision]
+
+          func restore_backup_text() -> void:
+              if restore_pending or backup_confirmation.is_empty():
+                  return
+              var token: String = backup_confirmation
+              invalidate_backup_preview()
+              var now := Time.get_ticks_msec()
+              if not session.stage_restore(backup_text.text, token, int(Time.get_unix_time_from_system() * 1000.0)):
+                  city.update_profile_display()
+                  backup_message.text = "Replacement not queued. Preview again or reload if storage is unavailable."
+                  return
+              # Explicit replacement starts a new local elapsed sample. On cancel,
+              # the old sample is unchanged, so the next tick settles time spent here.
+              city.last_ms = now
+              city.profile_pending_kind = "backup_restore"
+              city.update_profile_display()
+              restore_pending = true
+              backup_text.editable = false
+              backup_export.disabled = true
+              backup_preview.disabled = true
+              backup_close.disabled = true
+              backup_message.text = "Saving replacement… wait for confirmed storage."
+
+          func close_backup() -> void:
+              if restore_pending:
+                  return
+              backup_text.release_focus()
+              backup_panel.hide()
+              backup_confirmation = ""
+              city.process_mode = Node.PROCESS_MODE_INHERIT
+
+          func process_backup() -> void:
+              backup_button.disabled = session.status() != "ready" or not city.profile_confirmed or city.profile_view_invalid
+              if not restore_pending:
+                  return
+              # Use the existing city acknowledgement path while ordinary city input
+              # and auto-checkpointing are suspended. Do not publish speculative state.
+              city.process_profile(Time.get_ticks_msec(), int(Time.get_unix_time_from_system() * 1000.0))
+              if session.status() == "saving":
+                  return
+              restore_pending = false
+              backup_close.disabled = false
+              if session.status() == "ready" and not city.profile_view_invalid:
+                  city.cancel_map_preview()
+                  city.name_edit.text = str(city.city.individuals[city.selected_ray]["nickname"])
+                  city.status_label.text = "Backup restored."
+                  backup_message.text = "Backup restored."
+                  backup_text.editable = true
+                  backup_export.disabled = false
+                  backup_preview.disabled = false
+              else:
+                  backup_message.text = "Save unavailable. Close and reload to reconcile; replacement outcome is not confirmed."
 
           func mark_down(kind: String) -> void:
               downs[kind] += 1
@@ -909,6 +1074,8 @@ jobs:
               presses[kind] += 1
 
           func _process(_delta: float) -> void:
+              if backup_panel != null:
+                  process_backup()
               if diagnostic_window == null:
                   return
               diagnostic_window.arch002CityState = JSON.stringify({
@@ -918,8 +1085,10 @@ jobs:
                   "ready_age_ms": Time.get_ticks_msec() - city.profile_ready_since_ms,
                   "domain_revision": city.city.revision, "pending_kind": city.profile_pending_kind,
                   "status": city.status_label.text, "footer": city.profile_footer.text,
+                  "backup_open": backup_panel.visible, "backup_message": backup_message.text,
+                  "backup_restore_disabled": backup_restore.disabled,
                   "downs": downs, "presses": presses,
-                  "disabled": {"plant": city.plant_short.disabled, "feed": city.feed_button.disabled, "collect": city.collect_button.disabled, "harvest": city.harvest_button.disabled},
+                  "disabled": {"plant": city.plant_short.disabled, "feed": city.feed_button.disabled, "collect": city.collect_button.disabled, "harvest": city.harvest_button.disabled, "backup": backup_button.disabled},
                   "rects": {"plant": str(city.plant_short.get_global_rect()), "feed": str(city.feed_button.get_global_rect()), "collect": str(city.collect_button.get_global_rect()), "harvest": str(city.harvest_button.get_global_rect())},
                   "viewport": str(city.get_viewport_rect().size)})
           GD
@@ -1052,6 +1221,14 @@ jobs:
               record(kind + "-after-click")
               wait(lambda: (v if (v := view()) and v["presses"][kind] == before["presses"][kind] + 1 else None),
                    "Godot pressed signal: " + kind, 5)
+          def modal_click(x, y):
+              b = wait(bounds, "backup canvas")
+              api("POST", session + "/actions", {"actions": [{"type":"pointer","id":"mouse",
+                  "parameters":{"pointerType":"mouse"},"actions":[
+                      {"type":"pointerMove","duration":50,"origin":"viewport",
+                       "x":round(b["x"]+b["width"]*x/1100),"y":round(b["y"]+b["height"]*y/880)},
+                      {"type":"pointerDown","button":0},{"type":"pause","duration":80},
+                      {"type":"pointerUp","button":0}]}]})
           def observe(predicate, label, seconds=35):
               def probe():
                   pair = saved()
@@ -1114,11 +1291,52 @@ jobs:
                   for key in ("gold", "food", "xp", "individuals", "receipts", "farm_crops"):
                       assert final["active"]["model"][key] == harvested_model[key], key
                   capture("06-harvest-reloaded")
+                  # Use the normal backup controls, never inject a profile or call a command.
+                  click("backup", 930, 629)
+                  wait(lambda: view()["backup_open"], "backup modal opened")
+                  modal_click(200, 705)
+                  wait(lambda: view()["backup_message"].startswith("Confirmed backup exported"), "portable backup exported")
+                  exported = saved()["active"]
+                  capture("07-city-backup-export")
+                  modal_click(900, 705)
+                  wait(lambda: not view()["backup_open"], "backup modal closed")
+                  click("feed", 830, 363)
+                  observe(lambda m: m["food"] < exported["model"]["food"], "feed after exported backup")
+                  click("backup", 930, 629)
+                  wait(lambda: view()["backup_open"], "backup modal reopened")
+                  before_restore = saved()["active"]
+                  modal_click(430, 705)
+                  wait(lambda: not view()["backup_restore_disabled"] and view()["backup_message"].startswith("Replace current city"), "validated backup preview")
+                  assert saved()["active"] == before_restore, "preview mutated durable city"
+                  capture("08-city-backup-preview")
+                  modal_click(660, 705)
+                  wait(lambda: view()["backup_message"] == "Backup restored." and view()["phase"] == "ready", "confirmed replacement")
+                  replacement = saved()
+                  assert replacement["previous"] == before_restore
+                  assert replacement["active"]["storage_revision"] == before_restore["storage_revision"] + 1
+                  assert replacement["active"]["model"]["revision"] > max(before_restore["model"]["revision"], exported["model"]["revision"])
+                  for key in ("gold", "food", "xp", "individuals", "receipts", "farm_crops", "elapsed_ms"):
+                      assert replacement["active"]["model"][key] == exported["model"][key], key
+                  capture("09-city-backup-confirmed")
+                  modal_click(900, 705)
+                  wait(lambda: not view()["backup_open"], "back to restored city")
+                  api("POST", session + "/refresh", {})
+                  wait(bounds, "city reload after backup")
+                  wait(lambda: (v if (v := view()) and v["phase"] == "ready" and v["confirmed"] and not v["invalid"] else None), "restored city reload")
+                  backup_reloaded = saved()
+                  for key in ("gold", "food", "xp", "individuals", "receipts", "farm_crops"):
+                      assert backup_reloaded["active"]["model"][key] == exported["model"][key], key
+                  click("feed", 830, 363)
+                  post_backup_feed = observe(lambda m: m["food"] < exported["model"]["food"], "ordinary command after restore")
+                  assert len(post_backup_feed["active"]["model"]["receipts"]) == len(exported["model"]["receipts"]) + 1
+                  capture("10-city-backup-reloaded-fed")
                   report = {"persistent_city":"pass","browser":opened["capabilities"].get("browserVersion"),
                       "manifest":json.loads((root/"integration-manifest.json").read_text()),
-                      "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload","paid crop matures and harvests once","harvest persists after reload"],
+                      "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload","paid crop matures and harvests once","harvest persists after reload","portable city export and preview","explicit restore with previous-good","reload and command after restore"],
                       "fresh":fresh,"planted":planted,"fed":fed,"collected":collected,"restored":restored,"after":after,
                       "before_harvest":before_harvest,"harvested":harvested,"harvest_reloaded":final,
+                      "backup_exported":exported,"backup_before_restore":before_restore,"backup_replacement":replacement,
+                      "backup_reloaded":backup_reloaded,"post_backup_feed":post_backup_feed,
                       "actual_site_verified":False}
                   (evidence/"observation.json").write_text(json.dumps(report, indent=2))
                   print(json.dumps({"persistent_city":"pass","checks":report["checks"],"actual_site_verified":False}), flush=True)

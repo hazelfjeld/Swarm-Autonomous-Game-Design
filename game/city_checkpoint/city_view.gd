@@ -492,12 +492,24 @@ func _process(_delta: float) -> void:
 		status_label.text = "Builder job complete · +%d account XP" % (city.xp - previous_xp)
 	refresh()
 
+# Reconstruct the committed UI high-water mark from the retained receipt ledger.
+# A new view may reset op_count on restore; a fresh action must not reuse a
+# committed operation ID. No persistence schema or storage revision changes.
+func next_ui_operation_id() -> String:
+	for key in city.receipts.keys():
+		var receipt_id: String = str(key)
+		if receipt_id.begins_with("ui-"):
+			var serial_text: String = receipt_id.substr(3)
+			if serial_text.is_valid_int():
+				op_count = maxi(op_count, serial_text.to_int())
+	op_count += 1
+	return "ui-%d" % op_count
+
 func act(kind: String, value: String) -> void:
 	var now := Time.get_ticks_msec()
 	city.advance(maxi(0, now - last_ms))
 	last_ms = now
-	op_count += 1
-	var result: Dictionary = city.command(kind, value, "ui-%d" % op_count, city.revision)
+	var result: Dictionary = city.command(kind, value, next_ui_operation_id(), city.revision)
 	status_label.text = str(result["message"])
 	if result["ok"]:
 		adapter.capture(city.snapshot())
@@ -1103,4 +1115,29 @@ func capture_fixture(directory: String) -> void:
 		get_tree().quit(1)
 		return
 	print("CITY_GOAL_GUI_PASS: read-only opening goal, sample, incubation, ready placement and training guidance")
+	# Simulate a reconstructed view counter over a retained committed ledger.
+	# This does not exercise disk restore, wall clocks or a second writer.
+	var first_feed_revision: int = city.revision
+	var first_feed: Dictionary = city.command("feed", "ray-1", "ui-1000", first_feed_revision)
+	if not first_feed["ok"] or not city.receipts.has("ui-1000"):
+		push_error("UI operation fixture could not seed sparse receipt")
+		get_tree().quit(1)
+		return
+	op_count = 0
+	var fresh_cost: int = city.feed_cost("ray-1")
+	var fresh_food: int = city.food
+	var fresh_revision: int = city.revision
+	act("feed", "ray-1")
+	if fresh_cost <= 0 or city.food != fresh_food - fresh_cost or city.revision != fresh_revision + 1 or not city.receipts.has("ui-1001") or op_count != 1001:
+		push_error("Reconstructed UI reused an old operation or failed to apply a fresh feed")
+		get_tree().quit(1)
+		return
+	var after_fresh: Dictionary = city.snapshot()
+	var retried: Dictionary = city.command("feed", "ray-1", "ui-1000", first_feed_revision)
+	var conflicting: Dictionary = city.command("feed", "ray-2", "ui-1000", city.revision)
+	if not retried["ok"] or not str(retried["message"]).begins_with("Already applied:") or conflicting["ok"] or city.snapshot() != after_fresh:
+		push_error("Old receipt retry or conflicting payload changed the city")
+		get_tree().quit(1)
+		return
+	print("CITY_UI_OPERATION_PASS: retained sparse receipt, reset UI counter, fresh same-payload feed, old retry and conflicting payload")
 	get_tree().quit(0)

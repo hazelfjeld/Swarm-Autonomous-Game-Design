@@ -34,7 +34,7 @@ func _check(condition: bool, label: String) -> void:
 
 func _initialize() -> void:
 	_run()
-	_check(checks == 26, "all native session scenarios reached")
+	_check(checks == 37, "all native session scenarios reached")
 	print(JSON.stringify({"city_profile_session": "pass" if failures.is_empty() else "fail", "checks": checks, "failures": failures}))
 	quit(0 if failures.is_empty() else 1)
 
@@ -100,3 +100,29 @@ func _run() -> void:
 	_check(not failed.poll(marker) and failed.status() == "unavailable", "synchronous write refusal fails closed")
 	_check(failed.snapshot().is_empty() and not failed.stage_tick(1, marker), "no blank city after refusal")
 	_check(not session.start(p) and session.snapshot() == saved, "open cannot reset a live city")
+
+	# Portable data contains the last confirmed city, not a browser-local generation.
+	var backup: String = session.export_backup()
+	var decoded: Dictionary = JSON.parse_string(backup)
+	_check(decoded.size() == 4 and not decoded.has("storage_revision") and decoded.model.food == saved.food, "portable confirmed backup")
+	var preview: Dictionary = session.preview_backup(backup)
+	_check(preview.ok and preview.food == saved.food and preview.gold == saved.gold and preview.individual_count == saved.individuals.size(), "validated backup preview")
+	var invalid_backup: Dictionary = decoded.duplicate(true)
+	invalid_backup.version = 2
+	_check(not session.preview_backup(JSON.stringify(invalid_backup)).ok, "newer backup version refused")
+	invalid_backup = decoded.duplicate(true)
+	invalid_backup.wall_marker_ms = -1
+	_check(not session.preview_backup(JSON.stringify(invalid_backup)).ok, "negative backup marker refused")
+	invalid_backup = decoded.duplicate(true)
+	invalid_backup.model.food = -1
+	_check(not session.preview_backup(JSON.stringify(invalid_backup)).ok, "invalid city data refused")
+	invalid_backup = decoded.duplicate(true)
+	invalid_backup.storage_revision = 99
+	_check(not session.preview_backup(JSON.stringify(invalid_backup)).ok, "local generation injection refused")
+	_check(not session.preview_backup("{").ok and not session.preview_backup("x".repeat(1048577)).ok, "malformed and oversized backups refused")
+	_check(session.snapshot() == saved and p.writes == 2, "preview is side-effect free")
+	_check(reopened.export_backup().is_empty() and failed.export_backup().is_empty() and readonly_session.export_backup().is_empty(), "unconfirmed sessions cannot export")
+	_check(session.stage_tick(1, marker + 1) and session.export_backup().is_empty(), "in-flight checkpoint cannot export")
+	p.ack()
+	_check(session.poll(marker + 1) and not session.export_backup().is_empty(), "export resumes after ack")
+

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": "architect-20261126T1409Z-g68-city-export-b32e",
+  "run_id": null,
   "generation": 68,
-  "acquired_at": "2026-11-26T14:08:38.591Z",
-  "expires_at": "2026-11-26T14:38:38.591Z"
+  "acquired_at": null,
+  "expires_at": null
 }

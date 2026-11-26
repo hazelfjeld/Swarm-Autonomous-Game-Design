@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "director",
-  "generation": 98,
-  "run_id": null,
-  "acquired_at": null,
-  "expires_at": null
+  "generation": 99,
+  "run_id": "mountain-mover-20261126T1948Z-backup-clock",
+  "acquired_at": "2026-11-26T19:48:42Z",
+  "expires_at": "2026-11-26T20:18:42Z"
 }

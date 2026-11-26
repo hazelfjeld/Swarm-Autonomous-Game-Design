@@ -34,7 +34,8 @@ func _check(condition: bool, label: String) -> void:
 
 func _initialize() -> void:
 	_run()
-	_check(checks == 55, "all native session scenarios reached")
+	_run_import_clock()
+	_check(checks == 82, "all native session scenarios reached")
 	print(JSON.stringify({"city_profile_session": "pass" if failures.is_empty() else "fail", "checks": checks, "failures": failures}))
 	quit(0 if failures.is_empty() else 1)
 
@@ -154,3 +155,59 @@ func _run() -> void:
 	p.deliver({"kind": "write", "ok": true, "storage_revision": uncertain.storage_revision, "observed_text": "wrong"})
 	_check(not session.poll(marker + 3) and session.status() == "unavailable", "restore wrong readback fails closed")
 	_check(session.snapshot() == confirmed_restored and session.export_backup().is_empty(), "uncertain restore preserves confirmed view and refuses export")
+
+# A foreign device's wall-clock marker is metadata, not local offline credit.
+# Include a local clock rollback to keep the existing high-water invariant.
+func _run_import_clock() -> void:
+	var marker := 1700000000000
+	for fixture in [[marker + 86400000, marker], [9007199254740991, marker], [marker + 86400000, marker - 30000]]:
+		var restore_wall: int = fixture[1]
+		var port := FakePort.new()
+		var session = Session.new()
+		if not session.start(port):
+			_check(false, "foreign clock: open failed")
+			return
+		port.deliver({"kind":"open", "ok":true, "status":"missing", "active":null})
+		var opened: bool = session.poll(marker)
+		_check(opened, "foreign clock: fresh checkpoint staged")
+		if not opened:
+			return
+		port.ack()
+		var ready: bool = session.poll(marker) and session.status() == "ready"
+		_check(ready, "foreign clock: fresh checkpoint confirmed")
+		if not ready:
+			return
+		var original: Dictionary = session.snapshot()
+		var backup: Dictionary = JSON.parse_string(session.export_backup())
+		backup.wall_marker_ms = fixture[0]
+		var encoded := JSON.stringify(backup, "", true, true)
+		var preview: Dictionary = session.preview_backup(encoded)
+		_check(preview.ok and not preview.confirmation.is_empty(), "foreign clock: preview valid")
+		if not preview.ok:
+			return
+		var staged: bool = session.stage_restore(encoded, preview.confirmation, restore_wall)
+		_check(staged, "foreign clock: explicit restore staged")
+		if not staged:
+			return
+		var payload: Dictionary = JSON.parse_string(port.payload)
+		_check(int(payload.wall_marker_ms) == marker, "foreign clock: local marker retained")
+		_check(int(payload.model.elapsed_ms) == int(original.elapsed_ms), "foreign clock: no import bonus")
+		port.ack()
+		var confirmed: bool = session.poll(restore_wall) and session.status() == "ready"
+		_check(confirmed, "foreign clock: restore confirmed")
+		if not confirmed:
+			return
+		var second := FakePort.new()
+		var reopened = Session.new()
+		if not reopened.start(second):
+			_check(false, "foreign clock: reopen failed")
+			return
+		second.deliver({"kind":"open", "ok":true, "status":"ready", "active":port.payload})
+		var resumed: bool = reopened.poll(marker + 60000)
+		_check(resumed, "foreign clock: local resume staged")
+		if not resumed:
+			return
+		second.ack()
+		var resumed_ready: bool = reopened.poll(marker + 60000) and reopened.status() == "ready"
+		_check(resumed_ready and int(reopened.snapshot().get("elapsed_ms", -1)) == int(original.elapsed_ms) + 60000,
+			"foreign clock: one minute local absence settled")

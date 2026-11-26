@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": "architect-20261126T221230Z-g76-recovery-check",
+  "run_id": null,
   "generation": 76,
-  "acquired_at": "2026-11-26T22:12:30.000Z",
-  "expires_at": "2026-11-26T22:42:30.000Z"
+  "acquired_at": null,
+  "expires_at": null
 }

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "gameplay",
-  "run_id": "gameplay-20261126T0221Z-restore-seam-g52-b8e3",
+  "run_id": null,
   "generation": 52,
-  "acquired_at": "2026-11-26T02:21:07.717Z",
-  "expires_at": "2026-11-26T02:51:07.717Z"
+  "acquired_at": null,
+  "expires_at": null
 }

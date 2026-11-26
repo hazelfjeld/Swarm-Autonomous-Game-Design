@@ -838,14 +838,14 @@ jobs:
       - name: Checkout exact city validation seam (independent input)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 1a5528b35c957cc9a9183874e8abf4b89a12c499
+          ref: be6bdbd308137b0227f25d1fa92dbec45dd1e90d
           path: .arch002-city-source
           persist-credentials: false
       - name: Native city and staged-profile roundtrip (not hosted)
         timeout-minutes: 4
         run: |
           set -euo pipefail
-          test "$(git -C .arch002-city-source rev-parse HEAD)" = "1a5528b35c957cc9a9183874e8abf4b89a12c499"
+          test "$(git -C .arch002-city-source rev-parse HEAD)" = "be6bdbd308137b0227f25d1fa92dbec45dd1e90d"
           project="$RUNNER_TEMP/arch002-city-integration"
           mkdir -p "$project"
           cp -a .arch002-city-source/game/city_checkpoint/. "$project/"
@@ -913,6 +913,7 @@ jobs:
                   "phase": session.status(), "confirmed": city.profile_confirmed,
                   "invalid": city.profile_view_invalid, "overlay": city.profile_overlay.visible,
                   "tick_age_ms": Time.get_ticks_msec() - city.last_ms,
+                  "ready_age_ms": Time.get_ticks_msec() - city.profile_ready_since_ms,
                   "domain_revision": city.city.revision, "pending_kind": city.profile_pending_kind,
                   "status": city.status_label.text, "footer": city.profile_footer.text,
                   "downs": downs, "presses": presses,
@@ -1026,7 +1027,7 @@ jobs:
               return js("return window.arch002CityState ? JSON.parse(window.arch002CityState) : null;")
           def ready(kind):
               state = view()
-              return state if state and state["phase"] == "ready" and state["confirmed"] and not state["invalid"] and not state["overlay"] and not state["disabled"][kind] and 0 <= state["tick_age_ms"] < 300 else None
+              return state if state and state["phase"] == "ready" and state["confirmed"] and not state["invalid"] and not state["overlay"] and not state["disabled"][kind] and 0 <= state["ready_age_ms"] < 300 else None
           def record(label):
               item = {"label": label, "view": view(), "canvas": bounds(), "saved": saved()}
               trace.append(item)

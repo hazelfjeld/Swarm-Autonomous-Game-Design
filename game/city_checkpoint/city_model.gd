@@ -389,6 +389,8 @@ func command(kind: String, argument: String, op_id: String, expected_revision: i
 	# Same operation id never applies twice; conflicting reuse is rejected.
 	if op_id.is_empty():
 		return {"ok": false, "message": "Missing operation ID."}
+	if op_id.begins_with("ui-") and ui_operation_serial(op_id) == 0:
+		return {"ok": false, "message": "Invalid UI operation ID."}
 	if receipts.has(op_id):
 		var previous: Dictionary = receipts[op_id]
 		if previous["kind"] != kind or previous["argument"] != argument:
@@ -728,6 +730,19 @@ static func _checkpoint_serial(value: Variant, prefix: String, next_serial: int)
 	var suffix: String = value.substr(prefix.length())
 	return suffix.is_valid_int() and str(int(suffix)) == suffix and int(suffix) > 0 and int(suffix) < next_serial
 
+# Reserve canonical positive UI serials in the JSON-safe integer range.
+# Bound the string before parsing; overflowing or noncanonical text is invalid.
+static func ui_operation_serial(id: String) -> int:
+	if not id.begins_with("ui-"):
+		return 0
+	var suffix: String = id.substr(3)
+	if suffix.is_empty() or suffix.length() > 16 or not suffix.is_valid_int():
+		return 0
+	var serial: int = suffix.to_int()
+	if serial <= 0 or serial > CHECKPOINT_MAX_INTEGER or str(serial) != suffix:
+		return 0
+	return serial
+
 static func _checkpoint_receipt(ledger: Dictionary, id: Variant, kind: String, argument: String) -> bool:
 	return id is String and ledger.has(id) and ledger[id]["kind"] == kind and ledger[id]["argument"] == argument
 
@@ -870,7 +885,7 @@ static func _validated_checkpoint(raw: Variant) -> Dictionary:
 		return {}
 	for id in s.receipts:
 		var receipt: Variant = s.receipts[id]
-		if id.is_empty() or not _checkpoint_fields(receipt, ["kind", "argument", "message"]) or not command_kinds.has(receipt.kind) or not receipt.argument is String or not receipt.message is String:
+		if id.is_empty() or (id.begins_with("ui-") and ui_operation_serial(id) == 0) or not _checkpoint_fields(receipt, ["kind", "argument", "message"]) or not command_kinds.has(receipt.kind) or not receipt.argument is String or not receipt.message is String:
 			return {}
 	for species in s.discoveries:
 		if not SPECIES.has(species) or not s.discoveries[species] is bool or not s.discoveries[species]:

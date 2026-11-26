@@ -524,17 +524,21 @@ func _process(_delta: float) -> void:
 		status_label.text = "Builder job complete · +%d account XP" % (city.xp - previous_xp)
 	refresh()
 
-# Reconstruct the committed UI high-water mark from the retained receipt ledger.
-# A new view may reset op_count on restore; a fresh action must not reuse a
-# committed operation ID. No persistence schema or storage revision changes.
+# Reconstruct the high-water mark on restore. If a valid imported receipt is
+# at the serial ceiling, walk unused IDs instead of overflowing or reusing it.
 func next_ui_operation_id() -> String:
+	var highest: int = op_count
 	for key in city.receipts.keys():
-		var receipt_id: String = str(key)
-		if receipt_id.begins_with("ui-"):
-			var serial_text: String = receipt_id.substr(3)
-			if serial_text.is_valid_int():
-				op_count = maxi(op_count, serial_text.to_int())
-	op_count += 1
+		highest = maxi(highest, Model.ui_operation_serial(str(key)))
+	if highest < Model.CHECKPOINT_MAX_INTEGER:
+		op_count = highest + 1
+	else:
+		# There are fewer committed receipts than the serial space; each occupied
+		# candidate is skipped, including after wrap. No receipt is removed.
+		while true:
+			op_count = 1 if op_count >= Model.CHECKPOINT_MAX_INTEGER else op_count + 1
+			if not city.receipts.has("ui-%d" % op_count):
+				break
 	return "ui-%d" % op_count
 
 func act(kind: String, value: String) -> void:

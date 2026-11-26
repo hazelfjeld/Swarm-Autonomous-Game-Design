@@ -301,5 +301,104 @@ func _initialize() -> void:
 	final_level.food = 129
 	check(final_level.feed_level_cost("ray-1") == 129 and final_level.command("feed_level", "ray-1", "last-level", final_level.revision).ok and final_level.level == 10 and final_level.food == 0, "last legal level costs exact remaining pip")
 	check(final_level.feed_level_cost("ray-1") == 0 and not final_level.command("feed_level", "ray-1", "past-cap", final_level.revision).ok and final_level.level == 10, "bulk feeding cannot exceed level cap")
+	_test_checkpoint_restore()
 	print("CITY_MODEL_CHECKS: %d / %d passed" % [checks-failures,checks])
 	quit(0 if failures == 0 else 1)
+
+# Domain restore, not browser or disk persistence. Exercise only the actual
+# JSON codec and existing commands, including detached state on rejection.
+func _test_checkpoint_restore() -> void:
+	var source = Model.new()
+	var restored = Model.new()
+	var opening: Dictionary = source.snapshot()
+	check(Model.validate_snapshot(opening), "opening checkpoint validates")
+	check(restored.restore_snapshot(JSON.parse_string(JSON.stringify(opening))) and restored.snapshot() == opening, "opening JSON round-trip")
+	source.advance(1234)
+	check(source.command("sample", "", "restore-sample", source.revision).ok, "restore fixture sample")
+	check(source.command("build", "light,3,0", "restore-light", source.revision).ok, "restore fixture Light build")
+	check(source.command("buy_founder", "sunbeam", "restore-egg", source.revision).ok, "restore fixture founder purchase")
+	check(source.command("plant", "ribbon", "restore-plant", source.revision).ok, "restore fixture crop")
+	check(source.command("feed", "ray-1", "restore-feed", source.revision).ok, "restore fixture partial feed")
+	var pending_build: Dictionary = source.snapshot()
+	check(restored.restore_snapshot(JSON.parse_string(JSON.stringify(pending_build))) and restored.snapshot() == pending_build, "pending build, egg, crop and fractional income round-trip")
+	source.advance(30000)
+	check(source.command("place_founder", "building-1", "restore-hatch", source.revision).ok, "restore fixture founder placed")
+	check(source.command("set_favorite", "ray-2,1", "restore-favorite", source.revision).ok, "restore fixture favorite")
+	check(source.command("buy_sector", "2,0", "restore-land", source.revision).ok, "restore fixture expansion")
+	check(source.command("clear_obstacle", "starter-obstacle", "restore-clear", source.revision).ok, "restore fixture clearance")
+	var checkpoint: Dictionary = source.snapshot()
+	var json_value: Variant = JSON.parse_string(JSON.stringify(checkpoint))
+	check(Model.validate_snapshot(json_value), "expanded JSON checkpoint validates")
+	check(restored.restore_snapshot(json_value) and restored.snapshot() == checkpoint, "restored city equals committed source")
+	json_value.individuals["ray-2"].nickname = "External mutation"
+	check(restored.snapshot() == checkpoint, "restore detaches input dictionaries")
+	check(restored.command("plant", "ribbon", "restore-plant", 0).ok and restored.snapshot() == checkpoint, "restored receipt retries without another debit")
+	check(not restored.command("feed", "ray-2", "restore-plant", restored.revision).ok and restored.snapshot() == checkpoint, "restored conflicting receipt rejected")
+	check(not restored.command("feed", "ray-2", "stale-after-restore", 0).ok and restored.snapshot() == checkpoint, "restored revision rejects stale action")
+	source.advance(300000)
+	restored.advance(300000)
+	check(restored.snapshot() == source.snapshot() and restored.starter_obstacle.cleared, "resumed deadlines, XP and production match uninterrupted model")
+	check(restored.command("harvest", "", "restore-harvest", restored.revision).ok and source.command("harvest", "", "restore-harvest", source.revision).ok and restored.snapshot() == source.snapshot(), "resumed harvest settles identically")
+	var cases: Array = []
+	var bad: Dictionary = checkpoint.duplicate(true)
+	bad.gold = -1
+	cases.append(["negative balance", bad])
+	bad = checkpoint.duplicate(true)
+	bad.food = 0.5
+	cases.append(["fractional wallet", bad])
+	bad = checkpoint.duplicate(true)
+	bad.revision = "9"
+	cases.append(["string revision", bad])
+	bad = checkpoint.duplicate(true)
+	bad.checkpoint_schema = 99
+	cases.append(["unsupported schema", bad])
+	bad = checkpoint.duplicate(true)
+	bad["unknown_future_field"] = true
+	cases.append(["unknown schema field", bad])
+	bad = checkpoint.duplicate(true)
+	bad.individuals["ray-2"].species = "unknown"
+	cases.append(["unknown species", bad])
+	bad = checkpoint.duplicate(true)
+	bad.individuals["ray-2"].habitat_id = "tide-1"
+	cases.append(["incompatible habitat", bad])
+	bad = checkpoint.duplicate(true)
+	bad.habitat_bins.erase("building-1")
+	cases.append(["missing habitat bin", bad])
+	bad = checkpoint.duplicate(true)
+	bad.habitat_bins["building-1"].ticks = 120001
+	cases.append(["overflowing habitat bin", bad])
+	bad = checkpoint.duplicate(true)
+	bad.buildings[1].x = 0
+	bad.buildings[1].y = 0
+	cases.append(["overlapping footprint", bad])
+	bad = checkpoint.duplicate(true)
+	bad.stored_buildings.append(bad.buildings[0].duplicate(true))
+	cases.append(["duplicate building identity", bad])
+	bad = checkpoint.duplicate(true)
+	bad.next_ray_serial = 2
+	cases.append(["reused ray serial", bad])
+	bad = checkpoint.duplicate(true)
+	bad.receipts.erase("restore-egg")
+	cases.append(["missing acquisition receipt", bad])
+	bad = checkpoint.duplicate(true)
+	bad.receipts["restore-plant"].argument = "sprout"
+	cases.append(["conflicting crop receipt", bad])
+	bad = checkpoint.duplicate(true)
+	bad.construction.deadline_ms = bad.elapsed_ms
+	cases.append(["unsettled past builder deadline", bad])
+	bad = checkpoint.duplicate(true)
+	bad.individual.pips = 3
+	cases.append(["conflicting legacy alias", bad])
+	bad = checkpoint.duplicate(true)
+	bad.owned_sectors[4] = "3,3"
+	cases.append(["nonadjacent expansion", bad])
+	var before: Dictionary = restored.snapshot()
+	for case in cases:
+		check(not Model.validate_snapshot(case[1]) and not restored.restore_snapshot(case[1]) and restored.snapshot() == before, "invalid checkpoint rejected atomically: " + case[0])
+	check(restored.command("store_building", "farm-1", "restore-store", restored.revision).ok, "restore fixture stored farm")
+	var stored: Dictionary = restored.snapshot()
+	check(source.restore_snapshot(JSON.parse_string(JSON.stringify(stored))) and source.snapshot() == stored, "stored building round-trip")
+	check(source.command("restore_building", "farm-1,5,3", "restore-return", source.revision).ok, "restored storage permits legal move")
+	check(source.command("sell_ray", "ray-1", "restore-sell-starter", source.revision).ok, "restore fixture starter sold")
+	var sold: Dictionary = source.snapshot()
+	check(restored.restore_snapshot(JSON.parse_string(JSON.stringify(sold))) and restored.snapshot() == sold and restored.individuals.has("ray-2"), "sold starter remains absent after restore")

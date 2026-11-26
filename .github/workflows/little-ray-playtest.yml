@@ -1,0 +1,76 @@
+name: Little Ray — clickable browser smoke + playtest bundle
+
+on:
+  push:
+    branches: [swarm/director/DIRECTOR-004]
+    paths:
+      - 'prototypes/little-ray-proof/**'
+      - '.github/workflows/little-ray-playtest.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'prototypes/little-ray-proof/**'
+      - '.github/workflows/little-ray-playtest.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: little-ray-playtest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proof-of-loop:
+    name: Actual Chromium UI journey + offline artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Execute deterministic Node transition tests
+        run: node prototypes/little-ray-proof/test_logic.cjs
+      - name: Install browser smoke runtime
+        run: |
+          python -m pip install --disable-pip-version-check 'playwright==1.56.0'
+          if command -v google-chrome >/dev/null; then
+            google-chrome --version
+          elif command -v chromium >/dev/null; then
+            chromium --version
+          else
+            python -m playwright install chromium
+          fi
+      - name: Exercise desktop clicks, simulated timers, mobile touch and reload in real Chromium
+        env:
+          LITTLE_RAY_EVIDENCE: ${{ runner.temp }}/little-ray-evidence
+        run: python prototypes/little-ray-proof/browser_smoke.py
+      - name: Assemble offline HTML playtest ZIP
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p dist/little-ray-proof
+          cp prototypes/little-ray-proof/index.html prototypes/little-ray-proof/README.md dist/little-ray-proof/
+          (cd dist && zip -q -r little-ray-proof.zip little-ray-proof)
+      - name: Upload exact revision demo and browser screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: little-ray-playtest-${{ github.sha }}
+          path: |
+            dist/little-ray-proof.zip
+            ${{ runner.temp }}/little-ray-evidence/*.png
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Clarify evidence limits
+        if: always()
+        run: |
+          echo 'This workflow runs Node state tests and automated Chromium UI interactions.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'When successful, its artifact is an offline HTML **prototype**, not the production Godot game.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Automated browser checks and screenshots do not constitute human playtesting or creative approval.' >> "$GITHUB_STEP_SUMMARY"

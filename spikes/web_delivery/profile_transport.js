@@ -239,3 +239,79 @@ export async function openProfileSession(name, {
   } catch (_) { fail("Profile session startup deadline exceeded."); }
   return session;
 }
+
+
+// One-message mailbox for Godot's synchronous JavaScriptBridge calls.
+// A caller must consume the open/write result before submitting another
+// operation. A positive write result contains the actual durable readback,
+// not the submitted payload. No JS callback lifetime or eval is required.
+// The city shell supplies () => openProfileSession(itsProfileDatabase).
+export function createGodotProfilePort(openSession) {
+  let state = "new", session = null, message = "", nextState = "";
+  function finish(result, after) {
+    message = JSON.stringify(result);
+    nextState = after;
+    state = "result";
+  }
+  function fail(kind, status = "unavailable") {
+    finish({kind, ok: false, status}, "unavailable");
+  }
+  return {
+    begin_open() {
+      if (state !== "new") return false;
+      state = "opening";
+      Promise.resolve().then(openSession).then(opened => {
+        session = opened;
+        const initial = session?.initial;
+        if (session?.status !== "ready" || !initial?.ok ||
+            !((initial.status === "missing" && initial.active === null) ||
+              (initial.status === "ready" && typeof initial.active === "string"))) {
+          fail("open", session?.status === "read-only" ? "read-only" : "unavailable");
+          return;
+        }
+        finish({kind: "open", ok: true, status: initial.status,
+                active: initial.active}, "ready");
+      }).catch(() => fail("open"));
+      return true;
+    },
+    begin_write(payload) {
+      if (state !== "ready" || session?.status !== "ready" ||
+          typeof payload !== "string") return false;
+      state = "saving";
+      Promise.resolve().then(() => session.commit(payload)).then(result => {
+        if (!result?.ok || result.observed_text !== payload ||
+            !Number.isSafeInteger(result.storage_revision)) {
+          fail("write");
+          return;
+        }
+        finish({kind: "write", ok: true, storage_revision: result.storage_revision,
+                observed_text: result.observed_text}, "ready");
+      }).catch(() => fail("write"));
+      return true;
+    },
+    take_result() {
+      if (state !== "result") return "";
+      const value = message;
+      message = "";
+      state = nextState;
+      return value;
+    },
+    // Only healthy, consumed states may release a writer. Faulted sessions
+    // intentionally retain their fence until the page is reloaded.
+    async close() {
+      if (state !== "ready" || !session) return false;
+      state = "closing";
+      try {
+        if (!(await session.close())) {
+          state = "unavailable";
+          return false;
+        }
+        state = "closed";
+        return true;
+      } catch (_) {
+        state = "unavailable";
+        return false;
+      }
+    }
+  };
+}

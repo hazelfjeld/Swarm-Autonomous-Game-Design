@@ -2,7 +2,7 @@
 // The first argument is the exact checked-out production candidate module.
 const done = arguments[arguments.length - 1];
 (async () => {
-  const {create, openSession} = new Function(arguments[0].replace(/export (async )?function/g, "$1function") + "\nreturn {create: createProfileTransport, openSession: openProfileSession};")();
+  const {create, openSession, createPort} = new Function(arguments[0].replace(/export (async )?function/g, "$1function") + "\nreturn {create: createProfileTransport, openSession: openProfileSession, createPort: createGodotProfilePort};")();
   const name = "arch002-profile-transport-fixture-" + crypto.randomUUID();
   const open = () => new Promise((resolve, reject) => {
     const request = indexedDB.open(name, 1);
@@ -208,6 +208,42 @@ const done = arguments[arguments.length - 1];
     lateRequest.onsuccess();
     check(closedLate && stalled.status === "unavailable", "late open cannot revive timed-out session");
     await blocked.close();
+
+    // Actual IndexedDB + Web Locks through the synchronous Godot mailbox.
+    // This runs in Chromium; GDScript calls are covered separately by native CI.
+    const mailboxName = name + "-mailbox";
+    const mailbox = createPort(() => openSession(mailboxName));
+    const awaitMessage = async port => {
+      const deadline = performance.now() + 6000;
+      while (performance.now() < deadline) {
+        const encoded = port.take_result();
+        if (encoded) return JSON.parse(encoded);
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      throw new Error("mailbox result timed out");
+    };
+    check(mailbox.begin_open(), "mailbox queues startup");
+    check(!mailbox.begin_open() && !mailbox.begin_write(a), "mailbox refuses overlap during open");
+    const openedMailbox = await awaitMessage(mailbox);
+    check(openedMailbox.ok && openedMailbox.status === "missing" && openedMailbox.active === null, "mailbox verified missing result");
+    check(mailbox.take_result() === "", "mailbox result consumed once");
+    check(mailbox.begin_write(a), "mailbox queues actual write");
+    check(!mailbox.begin_write(b) && mailbox.take_result() === "", "mailbox prevents premature acknowledgement");
+    const savedMailbox = await awaitMessage(mailbox);
+    check(savedMailbox.ok && savedMailbox.storage_revision === 1 && savedMailbox.observed_text === a, "mailbox exact durable bytes");
+    const otherMailbox = createPort(() => openSession(mailboxName));
+    otherMailbox.begin_open();
+    check((await awaitMessage(otherMailbox)).status === "read-only" && !otherMailbox.begin_write(b), "mailbox second writer refused");
+    check(await mailbox.close(), "mailbox closes consumed owner");
+    const reopenedMailbox = createPort(() => openSession(mailboxName));
+    reopenedMailbox.begin_open();
+    const loadedMailbox = await awaitMessage(reopenedMailbox);
+    check(loadedMailbox.ok && loadedMailbox.active === a, "mailbox reload observes exact bytes");
+    reopenedMailbox.begin_write(b);
+    check((await awaitMessage(reopenedMailbox)).observed_text === b, "mailbox successor saves next generation");
+    await reopenedMailbox.close();
+    indexedDB.deleteDatabase(mailboxName);
+
     return {profile_transport: "pass", checks, actual_site_verified: false};
   } finally {
     other.close();

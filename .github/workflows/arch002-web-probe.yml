@@ -7,6 +7,8 @@ on:
     paths:
       - 'spikes/web_delivery/**'
       - 'tests/arch002_city_bridge.gd'
+      - 'tests/arch002_city_session_test.gd'
+      - 'integration/arch002/**'
       - 'tests/arch002_profile_transport_browser.js'
       - '.github/workflows/arch002-web-probe.yml'
 
@@ -805,7 +807,7 @@ jobs:
                   (evidence / "profile-transport-observation.json").write_text(json.dumps(transport_result, indent=2))
                   print(json.dumps(transport_result), flush=True)
                   assert transport_result.get("profile_transport") == "pass", transport_result
-                  assert len(transport_result.get("checks", [])) == 61, transport_result
+                  assert len(transport_result.get("checks", [])) == 72, transport_result
                   api("DELETE", session)
                   session = None
           finally:
@@ -836,20 +838,23 @@ jobs:
       - name: Checkout exact city validation seam (independent input)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 7f6cca177e02245542c63f7b27fd7c8755a9654a
+          ref: 0887136de701d247b23190167cc5854e137fffd7
           path: .arch002-city-source
           persist-credentials: false
       - name: Native city and staged-profile roundtrip (not hosted)
         timeout-minutes: 4
         run: |
           set -euo pipefail
-          test "$(git -C .arch002-city-source rev-parse HEAD)" = "7f6cca177e02245542c63f7b27fd7c8755a9654a"
+          test "$(git -C .arch002-city-source rev-parse HEAD)" = "0887136de701d247b23190167cc5854e137fffd7"
           project="$RUNNER_TEMP/arch002-city-integration"
           mkdir -p "$project"
           cp -a .arch002-city-source/game/city_checkpoint/. "$project/"
           cp spikes/web_delivery/profile_commit.gd "$project/"
           cp tests/arch002_city_bridge.gd "$project/"
+          cp integration/arch002/city_profile_session.gd "$project/"
+          cp tests/arch002_city_session_test.gd "$project/"
           export XDG_DATA_HOME="$RUNNER_TEMP/arch002-city-userdata"
           editor="$RUNNER_TEMP/arch002-engine/Godot_v4.7.2-stable_linux.x86_64"
           printf 'Architect source %s; city source %s\n' "$(git rev-parse HEAD)" "$(git -C .arch002-city-source rev-parse HEAD)"
           timeout 90s "$editor" --headless --path "$project" --script res://arch002_city_bridge.gd
+          timeout 90s "$editor" --headless --path "$project" --script res://arch002_city_session_test.gd

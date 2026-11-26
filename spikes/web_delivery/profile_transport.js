@@ -20,6 +20,17 @@ export function createProfileTransport(db) {
       return x;
     } catch (_) { return null; }
   }
+  // Normal commits retain exactly the immediately preceding generation.
+  // Inconsistent pairs are recovery-only; never repair by overwriting them.
+  function validPair(active, previous) {
+    const a = envelope(active);
+    if (!a) return false;
+    if (a.storage_revision === 1) return previous === undefined;
+    const p = envelope(previous);
+    return !!p && p.storage_revision === a.storage_revision - 1 &&
+      p.wall_marker_ms <= a.wall_marker_ms &&
+      p.model.revision <= a.model.revision;
+  }
   // Resolve only on the transaction's complete event; requests succeeding
   // individually are not durability acknowledgements.
   function readPair() {
@@ -44,7 +55,7 @@ export function createProfileTransport(db) {
       const pair = await readPair();
       if (pair.active === undefined && pair.previous === undefined)
         return {ok: true, status: "missing", active: null, previous: null};
-      if (!envelope(pair.active) || (pair.previous !== undefined && !envelope(pair.previous)))
+      if (!validPair(pair.active, pair.previous))
         return {...failure("Invalid or orphaned profile; preserve both records."), ...pair};
       return {ok: true, status: "ready", active: pair.active, previous: pair.previous ?? null};
     } catch (_) { return failure("Could not read profile."); }
@@ -78,7 +89,7 @@ export function createProfileTransport(db) {
         previous.onsuccess = () => {
           const actual = active.result;
           if (expected === null ? actual !== undefined || previous.result !== undefined : actual !== expected) return;
-          if (previous.result !== undefined && !envelope(previous.result)) return;
+          if (expected !== null && !validPair(actual, previous.result)) return;
           try {
             if (expected !== null) store.put(expected, "previous");
             store.put(payload, "active");

@@ -85,6 +85,45 @@ const done = arguments[arguments.length - 1];
     try {
       pair = await create(reopened).read();
       check(pair.active === winner && pair.previous === b, "reopened database retains committed pair");
+      // Inject individually valid but inconsistent records. Check both read
+      // and direct commit on separate instances, then inspect raw bytes.
+      const injectPair = (active, previous) => new Promise((resolve, reject) => {
+        const tx = reopened.transaction("profiles", "readwrite");
+        const s = tx.objectStore("profiles");
+        s.put(active, "active");
+        if (previous === undefined) s.delete("previous");
+        else s.put(previous, "previous");
+        tx.oncomplete = resolve;
+        tx.onabort = tx.onerror = () => reject(new Error("pair injection failed"));
+      });
+      const rawPair = () => new Promise((resolve, reject) => {
+        const tx = reopened.transaction("profiles", "readonly");
+        const s = tx.objectStore("profiles");
+        const active = s.get("active"), previous = s.get("previous");
+        tx.oncomplete = () => resolve([active.result, previous.result]);
+        tx.onabort = tx.onerror = () => reject(new Error("pair readback failed"));
+      });
+      const domainAhead = JSON.stringify({
+        storage_revision: 1, wall_marker_ms: 100, model: {revision: 9, food: 240}
+      });
+      for (const [label, active, previous, next] of [
+        ["missing predecessor", b, undefined, c],
+        ["newer predecessor", b, c, d],
+        ["generation gap", c, a, payload(4, 200)],
+        ["unexpected first predecessor", a, b, payload(2, 230)],
+        ["wall marker regression", b, payload(1, 240, 101), c],
+        ["domain revision regression", b, domainAhead, c]
+      ]) {
+        await injectPair(active, previous);
+        const rejected = await create(reopened).read();
+        check(!rejected.ok, label + ": read refused");
+        check(!(await create(reopened).commit(active, next)).ok,
+          label + ": direct write refused");
+        const raw = await rawPair();
+        check(raw[0] === active && raw[1] === previous,
+          label + ": both records preserved");
+      }
+      await injectPair(winner, b);
       // Corrupt the active record deliberately in the test database only.
       await new Promise((resolve, reject) => {
         const tx = reopened.transaction("profiles", "readwrite");

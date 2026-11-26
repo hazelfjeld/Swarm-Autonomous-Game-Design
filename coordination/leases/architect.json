@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": "architect-20261126T0011Z-keyboard-review-g54",
+  "run_id": null,
   "generation": 54,
-  "acquired_at": "2026-11-26T00:10:56.681Z",
-  "expires_at": "2026-11-26T00:40:56.681Z"
+  "acquired_at": null,
+  "expires_at": null
 }

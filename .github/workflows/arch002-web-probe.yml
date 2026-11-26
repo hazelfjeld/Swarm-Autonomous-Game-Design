@@ -878,8 +878,8 @@ jobs:
           var city: Variant
           var session: Variant
           var diagnostic_window: Variant
-          var presses: Dictionary = {"plant": 0, "feed": 0, "collect": 0}
-          var downs: Dictionary = {"plant": 0, "feed": 0, "collect": 0}
+          var presses: Dictionary = {"plant": 0, "feed": 0, "collect": 0, "harvest": 0}
+          var downs: Dictionary = {"plant": 0, "feed": 0, "collect": 0, "harvest": 0}
 
           func _ready() -> void:
               session = Session.new()
@@ -896,9 +896,11 @@ jobs:
                   city.plant_short.button_down.connect(mark_down.bind("plant"))
                   city.feed_button.button_down.connect(mark_down.bind("feed"))
                   city.collect_button.button_down.connect(mark_down.bind("collect"))
+                  city.harvest_button.button_down.connect(mark_down.bind("harvest"))
                   city.plant_short.pressed.connect(mark_pressed.bind("plant"))
                   city.feed_button.pressed.connect(mark_pressed.bind("feed"))
                   city.collect_button.pressed.connect(mark_pressed.bind("collect"))
+                  city.harvest_button.pressed.connect(mark_pressed.bind("harvest"))
 
           func mark_down(kind: String) -> void:
               downs[kind] += 1
@@ -917,8 +919,8 @@ jobs:
                   "domain_revision": city.city.revision, "pending_kind": city.profile_pending_kind,
                   "status": city.status_label.text, "footer": city.profile_footer.text,
                   "downs": downs, "presses": presses,
-                  "disabled": {"plant": city.plant_short.disabled, "feed": city.feed_button.disabled, "collect": city.collect_button.disabled},
-                  "rects": {"plant": str(city.plant_short.get_global_rect()), "feed": str(city.feed_button.get_global_rect()), "collect": str(city.collect_button.get_global_rect())},
+                  "disabled": {"plant": city.plant_short.disabled, "feed": city.feed_button.disabled, "collect": city.collect_button.disabled, "harvest": city.harvest_button.disabled},
+                  "rects": {"plant": str(city.plant_short.get_global_rect()), "feed": str(city.feed_button.get_global_rect()), "collect": str(city.collect_button.get_global_rect()), "harvest": str(city.harvest_button.get_global_rect())},
                   "viewport": str(city.get_viewport_rect().size)})
           GD
           cat > "$project/arch002_city_entry.tscn" <<'SCENE'
@@ -958,7 +960,7 @@ jobs:
               "sha256": files, "actual_site_verified": False}, indent=2))
           PY
       - name: Exercise real city controls and reload in Chromium
-        timeout-minutes: 4
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -1093,10 +1095,30 @@ jobs:
                   after = observe(lambda m: m["food"] == 230 and m["individuals"]["ray-1"]["pips"] == 2, "ordinary feed after reload")
                   assert len(after["active"]["model"]["receipts"]) == len(collected["active"]["model"]["receipts"]) + 1
                   capture("04-reloaded-fed")
+                  before_harvest = observe(lambda m: m["elapsed_ms"] >= m["farm_crops"]["farm-1"]["deadline_ms"], "real-time crop maturity", 75)
+                  before_model = before_harvest["active"]["model"]
+                  assert before_model["farm_crops"]["farm-1"] == planted["active"]["model"]["farm_crops"]["farm-1"]
+                  assert before_model["food"] == 230
+                  click("harvest", 910, 576)
+                  harvested = observe(lambda m: m["food"] == 270 and "farm-1" not in m["farm_crops"], "ordinary paid crop harvest")
+                  harvested_model = harvested["active"]["model"]
+                  assert harvested_model["gold"] == before_model["gold"]
+                  assert harvested_model["xp"] == before_model["xp"] + 5
+                  assert len(harvested_model["receipts"]) == len(before_model["receipts"]) + 1
+                  capture("05-harvested")
+                  api("POST", session + "/refresh", {})
+                  wait(bounds, "post-harvest city reload")
+                  harvest_restored = wait(lambda: (v if (v := view()) and v["phase"] == "ready" and v["confirmed"] and not v["invalid"] else None), "post-harvest ready")
+                  assert harvest_restored["disabled"]["harvest"]
+                  final = saved()
+                  for key in ("gold", "food", "xp", "individuals", "receipts", "farm_crops"):
+                      assert final["active"]["model"][key] == harvested_model[key], key
+                  capture("06-harvest-reloaded")
                   report = {"persistent_city":"pass","browser":opened["capabilities"].get("browserVersion"),
                       "manifest":json.loads((root/"integration-manifest.json").read_text()),
-                      "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload"],
+                      "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload","paid crop matures and harvests once","harvest persists after reload"],
                       "fresh":fresh,"planted":planted,"fed":fed,"collected":collected,"restored":restored,"after":after,
+                      "before_harvest":before_harvest,"harvested":harvested,"harvest_reloaded":final,
                       "actual_site_verified":False}
                   (evidence/"observation.json").write_text(json.dumps(report, indent=2))
                   print(json.dumps({"persistent_city":"pass","checks":report["checks"],"actual_site_verified":False}), flush=True)

@@ -875,14 +875,50 @@ jobs:
           const Session = preload("res://city_profile_session.gd")
           const CityScene = preload("res://main.tscn")
 
+          var city: Variant
+          var session: Variant
+          var diagnostic_window: Variant
+          var presses: Dictionary = {"plant": 0, "feed": 0, "collect": 0}
+          var downs: Dictionary = {"plant": 0, "feed": 0, "collect": 0}
+
           func _ready() -> void:
-              var session = Session.new()
+              session = Session.new()
               session.start_web()
-              var city = CityScene.instantiate()
+              city = CityScene.instantiate()
               if not city.configure_profile_session(session):
                   push_error("City persistence injection refused; no session-only fallback.")
                   return
               add_child(city)
+              # Read-only CI diagnostics, opt-in on the isolated export.
+              # No command injection, clock acceleration or persistence override.
+              if OS.has_feature("web") and JavaScriptBridge.eval("new URLSearchParams(location.search).get('arch002_test') === '1'"):
+                  diagnostic_window = JavaScriptBridge.get_interface("window")
+                  city.plant_short.button_down.connect(mark_down.bind("plant"))
+                  city.feed_button.button_down.connect(mark_down.bind("feed"))
+                  city.collect_button.button_down.connect(mark_down.bind("collect"))
+                  city.plant_short.pressed.connect(mark_pressed.bind("plant"))
+                  city.feed_button.pressed.connect(mark_pressed.bind("feed"))
+                  city.collect_button.pressed.connect(mark_pressed.bind("collect"))
+
+          func mark_down(kind: String) -> void:
+              downs[kind] += 1
+
+          func mark_pressed(kind: String) -> void:
+              presses[kind] += 1
+
+          func _process(_delta: float) -> void:
+              if diagnostic_window == null:
+                  return
+              diagnostic_window.arch002CityState = JSON.stringify({
+                  "phase": session.status(), "confirmed": city.profile_confirmed,
+                  "invalid": city.profile_view_invalid, "overlay": city.profile_overlay.visible,
+                  "tick_age_ms": Time.get_ticks_msec() - city.last_ms,
+                  "domain_revision": city.city.revision, "pending_kind": city.profile_pending_kind,
+                  "status": city.status_label.text, "footer": city.profile_footer.text,
+                  "downs": downs, "presses": presses,
+                  "disabled": {"plant": city.plant_short.disabled, "feed": city.feed_button.disabled, "collect": city.collect_button.disabled},
+                  "rects": {"plant": str(city.plant_short.get_global_rect()), "feed": str(city.feed_button.get_global_rect()), "collect": str(city.collect_button.get_global_rect())},
+                  "viewport": str(city.get_viewport_rect().size)})
           GD
           cat > "$project/arch002_city_entry.tscn" <<'SCENE'
           [gd_scene load_steps=2 format=3]
@@ -932,7 +968,7 @@ jobs:
           server = http.server.ThreadingHTTPServer(("127.0.0.1", 0),
               functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root)))
           threading.Thread(target=server.serve_forever, daemon=True).start()
-          url = f"http://127.0.0.1:{server.server_port}/index.html"
+          url = f"http://127.0.0.1:{server.server_port}/index.html?arch002_test=1"
           driver = subprocess.Popen(["chromedriver", "--port=9516"])
           session = None
           evidence = root.parent / "arch002-city-browser-evidence"
@@ -985,23 +1021,39 @@ jobs:
               return result
           def bounds():
               return js("const c=document.querySelector('canvas'); return c && c.width && !document.getElementById('status') ? c.getBoundingClientRect().toJSON() : null;")
-          def click(x, y):
+          trace = []
+          def view():
+              return js("return window.arch002CityState ? JSON.parse(window.arch002CityState) : null;")
+          def ready(kind):
+              state = view()
+              return state if state and state["phase"] == "ready" and state["confirmed"] and not state["invalid"] and not state["overlay"] and not state["disabled"][kind] and 0 <= state["tick_age_ms"] < 300 else None
+          def record(label):
+              item = {"label": label, "view": view(), "canvas": bounds(), "saved": saved()}
+              trace.append(item)
+              (evidence / "input-trace.json").write_text(json.dumps(trace, indent=2))
+              print(json.dumps({"input_trace": label, "view": item["view"], "canvas": item["canvas"]}), flush=True)
+          def click(kind, x, y):
               b = wait(bounds, "city canvas")
-              api("POST", session + "/actions", {"actions": [{"type":"pointer","id":"mouse",
-                  "parameters":{"pointerType":"mouse"},"actions":[
-                    {"type":"pointerMove","duration":0,"origin":"viewport",
-                     "x":round(b["x"]+b["width"]*x/1100),"y":round(b["y"]+b["height"]*y/880)},
-                    {"type":"pointerDown","button":0},{"type":"pointerUp","button":0}]}]})
+              def pointer(actions):
+                  api("POST", session + "/actions", {"actions": [{"type":"pointer","id":"mouse",
+                      "parameters":{"pointerType":"mouse"},"actions":actions}]})
+              pointer([{"type":"pointerMove","duration":50,"origin":"viewport",
+                        "x":round(b["x"]+b["width"]*x/1100),"y":round(b["y"]+b["height"]*y/880)}])
+              record(kind + "-before")
+              capture(kind + "-before")
+              before = wait(lambda: ready(kind), "confirmed enabled UI: " + kind, 15)
+              # Allow several Godot frames between mouse-down and mouse-up.
+              # Only one click per economic action, never retry an uncertain effect.
+              pointer([{"type":"pointerDown","button":0},{"type":"pause","duration":80},{"type":"pointerUp","button":0}])
+              capture(kind + "-after-click")
+              record(kind + "-after-click")
+              wait(lambda: (v if (v := view()) and v["presses"][kind] == before["presses"][kind] + 1 else None),
+                   "Godot pressed signal: " + kind, 5)
           def observe(predicate, label, seconds=35):
               def probe():
                   pair = saved()
                   return pair if pair and predicate(pair["active"]["model"]) else None
               return wait(probe, label, seconds)
-          def next_checkpoint():
-              before = saved()["active"]["storage_revision"]
-              wait(lambda: (saved() or {}).get("active", {}).get("storage_revision", 0) > before,
-                   "fresh acknowledged timer checkpoint", 10)
-              time.sleep(.15)
           def capture(name):
               (evidence / (name + ".png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
           try:
@@ -1019,18 +1071,14 @@ jobs:
                   assert js("return typeof window.littleRayCityProfilePort?.begin_open === 'function'")
                   fresh = observe(lambda m: m["gold"] == 1200 and m["food"] == 240, "initial durable city")
                   capture("01-initial")
-                  next_checkpoint()
-                  click(910, 480)
+                  click("plant", 910, 480)
                   planted = observe(lambda m: m["gold"] == 1180 and m["farm_crops"].get("farm-1",{}).get("recipe") == "sprout", "ordinary paid plant")
-                  next_checkpoint()
-                  click(830, 363)
+                  click("feed", 830, 363)
                   fed = observe(lambda m: m["food"] == 235 and m["individuals"]["ray-1"]["pips"] == 1, "ordinary feed")
                   capture("02-fed-and-planted")
                   # Verify positive resident income using real elapsed time, not a grant.
-                  next_checkpoint()
                   observe(lambda m: m["income_ticks"] >= 240, "resident bin accrual", 45)
-                  next_checkpoint()
-                  click(910, 315)
+                  click("collect", 910, 315)
                   collected = observe(lambda m: m["gold"] > 1180, "ordinary Gold collection")
                   assert collected["active"]["model"]["food"] == 235
                   assert collected["previous"]["storage_revision"] + 1 == collected["active"]["storage_revision"]
@@ -1040,8 +1088,7 @@ jobs:
                   restored = wait(lambda: (p if (p := saved()) and p["active"]["storage_revision"] > collected["active"]["storage_revision"] else None), "new startup checkpoint")
                   for key in ("gold", "food", "individuals", "receipts", "farm_crops"):
                       assert restored["active"]["model"][key] == collected["active"]["model"][key], key
-                  next_checkpoint()
-                  click(830, 363)
+                  click("feed", 830, 363)
                   after = observe(lambda m: m["food"] == 230 and m["individuals"]["ray-1"]["pips"] == 2, "ordinary feed after reload")
                   assert len(after["active"]["model"]["receipts"]) == len(collected["active"]["model"]["receipts"]) + 1
                   capture("04-reloaded-fed")
@@ -1052,6 +1099,14 @@ jobs:
                       "actual_site_verified":False}
                   (evidence/"observation.json").write_text(json.dumps(report, indent=2))
                   print(json.dumps({"persistent_city":"pass","checks":report["checks"],"actual_site_verified":False}), flush=True)
+          except Exception as error:
+              if session:
+                  try:
+                      capture("99-failure")
+                      record("failure: " + str(error))
+                  except Exception as diagnostic_error:
+                      print("Failure evidence capture:", diagnostic_error, flush=True)
+              raise
           finally:
               if session:
                   try:

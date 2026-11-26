@@ -188,10 +188,8 @@ func export_backup() -> String:
 		return ""
 	return encoded
 
-## Read-only preview. Do not pass the backup directly to the normal write
-## path: explicit replacement must reconcile local generations and preserve
-## the previous-good recovery copy in its own transaction.
-func preview_backup(encoded: String) -> Dictionary:
+## Parse and normalize untrusted portable data without changing session state.
+func _decode_backup(encoded: String) -> Dictionary:
 	if encoded.is_empty() or encoded.to_utf8_buffer().size() > MAX_BACKUP_BYTES:
 		return {"ok": false, "reason": "Backup empty or too large."}
 	var parser := JSON.new()
@@ -207,7 +205,50 @@ func preview_backup(encoded: String) -> Dictionary:
 	var candidate = City.new()
 	if not raw.model is Dictionary or not candidate.restore_snapshot(raw.model):
 		return {"ok": false, "reason": "Invalid or unsupported city data."}
-	var normalized: Dictionary = candidate.snapshot()
+	return {"ok": true, "model": candidate.snapshot(), "wall_marker_ms": int(raw.wall_marker_ms)}
+
+## Read-only preview. Its confirmation token binds exact input bytes to the
+## current durable generation, so an intervening autosave requires a new preview.
+## The token is a local consistency check, not an authentication credential.
+func preview_backup(encoded: String) -> Dictionary:
+	var decoded: Dictionary = _decode_backup(encoded)
+	if not decoded.ok:
+		return decoded
+	var normalized: Dictionary = decoded.model
+	var confirmation := ""
+	if _status == "ready":
+		confirmation = _backup_confirmation(encoded)
 	return {"ok": true, "gold": normalized.gold, "food": normalized.food, "xp": normalized.xp,
 		"individual_count": normalized.individuals.size(), "domain_revision": normalized.revision,
-		"wall_marker_ms": int(raw.wall_marker_ms)}
+		"wall_marker_ms": decoded.wall_marker_ms, "confirmation": confirmation}
+
+func _backup_confirmation(encoded: String) -> String:
+	return str(_boundary.committed().storage_revision) + ":" + encoded.sha256_text()
+
+## Only a ready writer may explicitly restore a previewed backup. A successful
+## return means queued, not saved. Keep the old active bytes as previous-good
+## via the existing atomic normal-write path; never reuse imported generations.
+## Restore the saved domain timeline exactly (no offline bonus for import).
+## Rebase the domain revision to invalidate stale commands, and keep the wall
+## marker nondecreasing. UI must resample its monotonic clock and operation IDs
+## after a confirmed restore before accepting ordinary actions again.
+func stage_restore(encoded: String, confirmation: String, observed_wall_ms: int) -> bool:
+	if _status != "ready" or not _valid_time(observed_wall_ms):
+		return false
+	if confirmation.is_empty() or confirmation != _backup_confirmation(encoded):
+		return false
+	var decoded: Dictionary = _decode_backup(encoded)
+	if not decoded.ok:
+		return false
+	var committed: Dictionary = _boundary.committed()
+	var candidate: Dictionary = decoded.model
+	var prior_revision: int = maxi(int(candidate.revision), int(committed.model.revision))
+	# City validation reserves MAX_INTEGER itself; avoid consuming the last
+	# representable revision or local generation on an invalid restore request.
+	if prior_revision >= Commit.MAX_INTEGER - 1 or int(committed.storage_revision) >= Commit.MAX_INTEGER:
+		return false
+	candidate.revision = prior_revision + 1
+	if not _valid_city(candidate):
+		return false
+	var marker: int = maxi(maxi(int(committed.wall_marker_ms), int(decoded.wall_marker_ms)), observed_wall_ms)
+	return _stage(candidate, marker, {"ok": true, "message": "Backup restored."})

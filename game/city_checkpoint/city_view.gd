@@ -146,15 +146,17 @@ func _ready() -> void:
 	build_choice.position = Vector2(30, 570)
 	build_choice.fit_to_longest_item = false
 	build_choice.clip_text = true
-	build_choice.size = Vector2(215, MIN_CONTROL_TARGET)
+	build_choice.size = Vector2(185, MIN_CONTROL_TARGET)
 	add_child(build_choice)
-	coordinate_x = coordinate_at(Vector2(250, 570), "X ", 3)
-	coordinate_y = coordinate_at(Vector2(330, 570), "Y ", 0)
-	build_button = button_at("Confirm placement", Vector2(410, 570), place_selected)
-	build_button.size = Vector2(174, MIN_CONTROL_TARGET)
+	coordinate_x = coordinate_at(Vector2(223, 570), "X ", 3)
+	coordinate_x.name = "PlacementX"
+	coordinate_y = coordinate_at(Vector2(331, 570), "Y ", 0)
+	coordinate_y.name = "PlacementY"
+	build_button = button_at("Confirm placement", Vector2(439, 570), place_selected)
+	build_button.size = Vector2(150, MIN_CONTROL_TARGET)
 	build_button.add_theme_font_size_override("font_size", 15)
-	cancel_build_button = button_at("Cancel build", Vector2(590, 570), func(): act("cancel_build", ""))
-	cancel_build_button.size = Vector2(142, MIN_CONTROL_TARGET)
+	cancel_build_button = button_at("Cancel build", Vector2(597, 570), func(): act("cancel_build", ""))
+	cancel_build_button.size = Vector2(135, MIN_CONTROL_TARGET)
 	cancel_build_button.add_theme_font_size_override("font_size", 15)
 	map_mode_button = button_at("Map: tend / collect", Vector2(30, 145), toggle_map_mode)
 	map_mode_button.size = Vector2(250, 44)
@@ -310,10 +312,34 @@ func refresh_roster() -> void:
 			if id == selected_habitat:
 				habitat_choice.select(habitat_choice.item_count - 1)
 
+# Reserve actual theme minimum widths, then distribute the remaining desktop
+# row width. The spinner's arrows/LineEdit can exceed its requested width.
+func layout_placement_row() -> void:
+	var controls: Array[Control] = [build_choice, coordinate_x, coordinate_y, build_button, cancel_build_button]
+	var preferred: Array[float] = [185.0, 100.0, 100.0, 150.0, 135.0]
+	var widths: Array[float] = []
+	var remaining: float = 670.0 # 702-unit band minus four 8-unit gaps.
+	for control in controls:
+		var minimum: float = ceilf(maxf(MIN_CONTROL_TARGET, control.get_combined_minimum_size().x))
+		widths.append(minimum)
+		remaining -= minimum
+	# Protect coordinate entry and button labels before allocating extra selector space.
+	for i in [1, 2, 3, 4, 0]:
+		var extra: float = minf(maxf(0.0, remaining), maxf(0.0, preferred[i] - widths[i]))
+		widths[i] += extra
+		remaining -= extra
+	widths[0] += maxf(0.0, remaining)
+	var x: float = 30.0
+	for i in range(controls.size()):
+		var control: Control = controls[i]
+		control.position = Vector2(x, 570.0)
+		control.size = Vector2(widths[i], maxf(MIN_CONTROL_TARGET, control.get_combined_minimum_size().y))
+		x += control.size.x + 8.0
+
 func coordinate_at(at: Vector2, prefix_text: String, initial: int) -> SpinBox:
 	var field := SpinBox.new()
 	field.position = at
-	field.size = Vector2(76, MIN_CONTROL_TARGET)
+	field.size = Vector2(100, MIN_CONTROL_TARGET)
 	field.min_value = 0
 	field.max_value = 7
 	field.step = 1
@@ -829,6 +855,7 @@ func refresh() -> void:
 		build_button.text = "Restore · free"
 	cancel_build_button.disabled = city.construction.is_empty()
 	cancel_build_button.text = "Cancel job" if city.construction.get("kind", "build") == "clear" else ("Cancel upgrade" if city.construction.get("kind", "build") == "upgrade" else "Cancel build")
+	layout_placement_row()
 	var job: Dictionary = city.farm_crop(selected_farm)
 	var empty: bool = job.is_empty()
 	plant_short.disabled = selected_farm.is_empty() or not empty or city.gold < 20
@@ -1032,12 +1059,20 @@ func desktop_control_targets_ok() -> bool:
 	for i in range(controls.size()):
 		var rect := controls[i].get_global_rect()
 		if rect.size.x < MIN_CONTROL_TARGET or rect.size.y < MIN_CONTROL_TARGET or not bounds.encloses(rect):
-			push_error("City desktop control target too small or clipped: %s" % controls[i].name)
+			push_error("City desktop control target too small or clipped: %s %s" % [controls[i].name, rect])
 			return false
 		for j in range(i):
 			if rect.intersects(controls[j].get_global_rect()):
-				push_error("City desktop controls overlap: %s / %s" % [controls[i].name, controls[j].name])
+				push_error("City desktop controls overlap: %s %s / %s %s" % [controls[i].name, rect, controls[j].name, controls[j].get_global_rect()])
 				return false
+	var placement: Array[Control] = [build_choice, coordinate_x, coordinate_y, build_button, cancel_build_button]
+	var right: float = 30.0 - 8.0
+	for control in placement:
+		var rect := control.get_global_rect()
+		if rect.position.x < right + 8.0 - 0.01 or rect.end.x > 732.01 or rect.end.y > 617.0:
+			push_error("Placement row escaped its band or gap: %s %s previous right %s" % [control.name, rect, right])
+			return false
+		right = rect.end.x
 	return true
 
 func capture_fixture(directory: String) -> void:
@@ -1218,6 +1253,10 @@ func capture_fixture(directory: String) -> void:
 	if get_viewport().get_texture().get_image().save_png(directory + "/06-expanded-land.png") != OK:
 		get_tree().quit(1)
 		return
+	if not desktop_control_targets_ok():
+		get_tree().quit(1)
+		return
+	print("CITY_EXPANDED_DESKTOP_TARGETS_PASS: actual control bounds after land expansion")
 	print("CITY_LAND_GUI_PASS: paid adjacent sector, paid obstacle clearance, ordinary 60-second timer, exact XP and usable land")
 	if not map_layout_fixture_ok():
 		push_error("Expanded map header or cell projection regression")

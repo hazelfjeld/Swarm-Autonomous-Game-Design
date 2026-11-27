@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "art-audio",
-  "run_id": "art-audio-2026-11-27T09-35-00-587Z-g87-gatecheck",
+  "run_id": null,
   "generation": 87,
-  "acquired_at": "2026-11-27T09:35:00.587Z",
-  "expires_at": "2026-11-27T10:05:00.587Z"
+  "acquired_at": null,
+  "expires_at": null
 }

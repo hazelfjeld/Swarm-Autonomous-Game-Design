@@ -84,3 +84,186 @@ jobs:
           path: ${{ runner.temp }}/city-evidence
           if-no-files-found: warn
           retention-days: 3
+
+      # Separate instrumented standalone export; ordinary city-web above is unchanged.
+      - name: Compact served city control geometry and input
+        timeout-minutes: 7
+        run: |
+          set -euo pipefail
+          command -v google-chrome
+          command -v chromedriver
+          mkdir -p "$RUNNER_TEMP/city-compact-evidence" "$RUNNER_TEMP/city-compact-export"
+          cp -a game/city_checkpoint "$RUNNER_TEMP/city-compact-project"
+          rm -rf "$RUNNER_TEMP/city-compact-project/.godot"
+          python3 - <<'PY'
+          import os, pathlib
+          p = pathlib.Path(os.environ["RUNNER_TEMP"]) / "city-compact-project/city_view.gd"
+          s = p.read_text()
+          assert s.count("func _ready() -> void:\n") == 1
+          s = s.replace("func _ready() -> void:\n", "func _ready() -> void:\n\tcall_deferred(\"_start_compact_probe\")\n", 1)
+          # Read-only instrumentation, never copied back to the submitted project.
+          s += """
+          func _start_compact_probe() -> void:
+          \tif not OS.has_feature("web"):
+          \t\treturn
+          \tvar timer := Timer.new()
+          \ttimer.wait_time = 0.2
+          \ttimer.timeout.connect(_compact_probe)
+          \tadd_child(timer)
+          \ttimer.start()
+
+          func _compact_probe() -> void:
+          \tvar names := ["name_edit", "sample_button", "collect_button", "feed_button", "level_button", "farm_choice", "plant_short", "plant_long", "harvest_button", "build_choice", "coordinate_x", "coordinate_y", "build_button", "cancel_build_button", "map_mode_button", "cancel_preview_button", "ray_choice", "habitat_choice", "move_ray_button", "upgrade_button", "shop_choice", "buy_button", "place_egg_button", "collection_button", "favorite_button", "sell_button"]
+          \tvar rows: Dictionary = {}
+          \tfor key in names:
+          \t\tvar control: Control = get(key)
+          \t\tvar transform: Transform2D = control.get_viewport().get_screen_transform() * control.get_global_transform_with_canvas()
+          \t\tvar rect: Rect2 = transform * Rect2(Vector2.ZERO, control.size)
+          \t\trows[key] = {"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y, "visible": control.is_visible_in_tree()}
+          \tvar window_size := get_window().size
+          \tvar report := {"window": [window_size.x, window_size.y], "controls": rows, "gold": city.gold, "sample_disabled": sample_button.disabled}
+          \tJavaScriptBridge.eval("window.cityCompactProbe = " + JSON.stringify(report))
+          """
+          p.write_text(s)
+          PY
+          godot="$RUNNER_TEMP/Godot_v4.7.2-stable_linux.x86_64"
+          "$godot" --headless --path "$RUNNER_TEMP/city-compact-project" --editor --import
+          "$godot" --headless --path "$RUNNER_TEMP/city-compact-project" --export-release Web "$RUNNER_TEMP/city-compact-export/index.html"
+          python3 - <<'PY'
+          import base64, functools, http.server, json, os, pathlib
+          import subprocess, tempfile, threading, time, urllib.request
+
+          root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "city-compact-export"
+          evidence = root.parent / "city-compact-evidence"
+          report = {"source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+                    "instrumented_standalone": True, "actual_site_verified": False,
+                    "physical_touch_verified": False, "minimum_css_px": 44, "cases": []}
+          def retain():
+              (evidence / "compact-layout.json").write_text(json.dumps(report, indent=2))
+          retain()
+          server = http.server.ThreadingHTTPServer(("127.0.0.1", 0),
+              functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root)))
+          threading.Thread(target=server.serve_forever, daemon=True).start()
+          driver = subprocess.Popen(["chromedriver", "--port=9517"])
+          session = None
+          def api(method, path, value=None):
+              req = urllib.request.Request("http://127.0.0.1:9517" + path,
+                  data=None if value is None else json.dumps(value).encode(),
+                  headers={"Content-Type": "application/json"}, method=method)
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  return json.load(response)["value"]
+          def wait(fn, label, seconds=25):
+              deadline = time.monotonic() + seconds
+              while time.monotonic() < deadline:
+                  v = fn()
+                  if v:
+                      return v
+                  time.sleep(.15)
+              raise AssertionError("Timed out: " + label)
+          def driver_ready():
+              try:
+                  return api("GET", "/status").get("ready")
+              except OSError:
+                  return False
+          def js(source):
+              return api("POST", session + "/execute/sync", {"script": source, "args": []})
+          def observe():
+              return js("""
+                const c=document.querySelector('canvas'), p=window.cityCompactProbe;
+                if(!c || !p || document.getElementById('status')) return null;
+                return {canvas:c.getBoundingClientRect().toJSON(), backing:[c.width,c.height],
+                        viewport:[innerWidth,innerHeight], dpr:devicePixelRatio, probe:p};
+              """)
+          def css_rect(rect, frame):
+              canvas = frame["canvas"]
+              w, h = frame["probe"]["window"]
+              return {"x": canvas["x"] + rect["x"] * canvas["width"] / w,
+                      "y": canvas["y"] + rect["y"] * canvas["height"] / h,
+                      "w": rect["w"] * canvas["width"] / w,
+                      "h": rect["h"] * canvas["height"] / h}
+          def failures(rect, frame):
+              c = frame["canvas"]
+              vw, vh = frame["viewport"]
+              eps = .05  # floating-point tolerance, not a relaxed target
+              tags = []
+              if min(rect["w"], rect["h"]) < 44 - eps:
+                  tags.append("undersized")
+              if (rect["x"] < max(0, c["x"]) - eps or rect["y"] < max(0, c["y"]) - eps
+                  or rect["x"] + rect["w"] > min(vw, c["right"]) + eps
+                  or rect["y"] + rect["h"] > min(vh, c["bottom"]) + eps):
+                  tags.append("clipped")
+              return tags
+          # Pure conversion/classifier sanity checks; actual engine geometry follows.
+          f = {"canvas":{"x":10,"y":20,"width":550,"height":440,"right":560,"bottom":460},
+               "probe":{"window":[1100,880]}, "viewport":[600,500]}
+          assert css_rect({"x":20,"y":40,"w":100,"h":44},f) == {"x":20,"y":40,"w":50,"h":22}
+          assert failures({"x":20,"y":40,"w":50,"h":22},f) == ["undersized"]
+          assert failures({"x":20,"y":40,"w":44,"h":44},f) == []
+          assert failures({"x":0,"y":40,"w":44,"h":44},f) == ["clipped"]
+          try:
+              with tempfile.TemporaryDirectory(prefix="city-compact-") as profile:
+                  wait(driver_ready, "ChromeDriver")
+                  opened = api("POST", "/session", {"capabilities":{"alwaysMatch":{"browserName":"chrome",
+                      "goog:chromeOptions":{"args":["--headless=new","--window-size=1200,1000",
+                          "--disable-dev-shm-usage","--user-data-dir="+profile]}}}})
+                  session = "/session/" + opened["sessionId"]
+                  report["browser"] = opened["capabilities"].get("browserVersion")
+                  api("POST", session + "/timeouts", {"script":10000,"pageLoad":30000})
+                  for width,height in [(1100,880),(1024,768),(768,1024),(390,844),(844,390)]:
+                      label = f"{width}x{height}"
+                      api("POST", session + "/goog/cdp/execute", {"cmd":"Emulation.setDeviceMetricsOverride",
+                          "params":{"width":width,"height":height,"deviceScaleFactor":1,"mobile":False}})
+                      api("POST", session + "/url", {"url":f"http://127.0.0.1:{server.server_port}/index.html?layout={label}"})
+                      def settled():
+                          f = observe()
+                          if f and f["viewport"] == [width,height] and f["dpr"] == 1 and f["backing"] == f["probe"]["window"]:
+                              return f
+                      frame = wait(settled, "consistent engine/backing/CSS geometry " + label)
+                      time.sleep(.4)
+                      frame = wait(settled, "settled layout " + label)
+                      assert len(frame["probe"]["controls"]) == 26
+                      assert frame["probe"]["gold"] == 1200 and not frame["probe"]["sample_disabled"]
+                      case = {"viewport":label, "frame":frame, "controls":{}, "sample_click":"not_attempted"}
+                      for key, raw in frame["probe"]["controls"].items():
+                          rect = css_rect(raw, frame)
+                          case["controls"][key] = {"rect":rect,"failures":failures(rect, frame) + ([] if raw["visible"] else ["hidden"])}
+                      (evidence / (label + "-before.png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+                      sample = case["controls"]["sample_button"]
+                      if "clipped" not in sample["failures"]:
+                          b = sample["rect"]
+                          x, y = round(b["x"] + b["w"]/2), round(b["y"] + b["h"]/2)
+                          api("POST", session + "/actions", {"actions":[{"type":"pointer","id":"mouse","parameters":{"pointerType":"mouse"},"actions":[
+                              {"type":"pointerMove","duration":50,"origin":"viewport","x":x,"y":y},
+                              {"type":"pointerDown","button":0},{"type":"pause","duration":80},{"type":"pointerUp","button":0}]}]})
+                          try:
+                              wait(lambda: (v if (v := observe()) and v["probe"]["gold"] == 1210 and v["probe"]["sample_disabled"] else None), "one sample credit " + label, 5)
+                              case["sample_click"] = "passed"
+                          except AssertionError:
+                              case["sample_click"] = "failed"
+                      (evidence / (label + "-after.png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+                      case["failing_controls"] = [key for key,row in case["controls"].items() if row["failures"]]
+                      report["cases"].append(case)
+                      retain()
+                      print(json.dumps({"viewport":label,"failing_controls":case["failing_controls"],"sample_click":case["sample_click"]}), flush=True)
+                  report["pass"] = all(not c["failing_controls"] and c["sample_click"] == "passed" for c in report["cases"])
+                  retain()
+                  # Preserve failures as evidence rather than silently claiming touch support.
+                  assert report["pass"], "Served control target/access failure; inspect compact-layout.json"
+          finally:
+              if session:
+                  try:
+                      api("DELETE", session)
+                  except Exception:
+                      pass
+              driver.terminate()
+              driver.wait(timeout=10)
+              server.shutdown()
+          PY
+      - name: Retain compact served-layout evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: city-compact-evidence
+          path: ${{ runner.temp }}/city-compact-evidence
+          if-no-files-found: warn
+          retention-days: 3

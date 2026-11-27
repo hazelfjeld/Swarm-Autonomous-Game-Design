@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 123,
-  "run_id": "mountain-mover-20261127T0747Z-recovery-ack",
-  "acquired_at": "2026-11-27T07:47:28.270Z",
-  "expires_at": "2026-11-27T08:17:28.270Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 113,
-  "run_id": "mountain-mover-20261127T025133Z-package",
-  "acquired_at": "2026-11-27T02:51:33Z",
-  "expires_at": "2026-11-27T03:21:33Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

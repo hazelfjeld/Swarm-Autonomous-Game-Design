@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "gameplay",
-  "run_id": "gameplay-20261127T112143Z-control-targets-g85",
+  "run_id": null,
   "generation": 85,
-  "acquired_at": "2026-11-27T11:22:34.647Z",
-  "expires_at": "2026-11-27T11:52:34.647Z"
+  "acquired_at": null,
+  "expires_at": null
 }

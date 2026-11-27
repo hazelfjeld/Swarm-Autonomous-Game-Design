@@ -861,14 +861,14 @@ jobs:
       - name: Checkout exact city validation seam (independent input)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 6714d55e7c413a2ad438006c835a4b00cf872935
+          ref: e7836376bfea8b3433d6bd9b76ef0bfc9cc06d87
           path: .arch002-city-source
           persist-credentials: false
       - name: Native city and staged-profile roundtrip (not hosted)
         timeout-minutes: 4
         run: |
           set -euo pipefail
-          test "$(git -C .arch002-city-source rev-parse HEAD)" = "6714d55e7c413a2ad438006c835a4b00cf872935"
+          test "$(git -C .arch002-city-source rev-parse HEAD)" = "e7836376bfea8b3433d6bd9b76ef0bfc9cc06d87"
           project="$RUNNER_TEMP/arch002-city-integration"
           mkdir -p "$project"
           cp -a .arch002-city-source/game/city_checkpoint/. "$project/"

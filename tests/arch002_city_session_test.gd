@@ -35,7 +35,8 @@ func _check(condition: bool, label: String) -> void:
 func _initialize() -> void:
 	_run()
 	_run_import_clock()
-	_check(checks == 82, "all native session scenarios reached")
+	_run_previous_validation()
+	_check(checks == 88, "all native session scenarios reached")
 	print(JSON.stringify({"city_profile_session": "pass" if failures.is_empty() else "fail", "checks": checks, "failures": failures}))
 	quit(0 if failures.is_empty() else 1)
 
@@ -45,7 +46,7 @@ func _run() -> void:
 	var session = Session.new()
 	_check(session.start(p) and session.status() == "opening", "open queued")
 	_check(session.snapshot().is_empty() and not session.poll(marker), "no city before read")
-	p.deliver({"kind": "open", "ok": true, "status": "missing", "active": null})
+	p.deliver({"kind": "open", "ok": true, "status": "missing", "active": null, "previous": null})
 	_check(session.poll(marker) and session.status() == "saving" and p.writes == 1, "verified missing stages first save")
 	_check(session.snapshot().is_empty(), "fresh city hidden until durable ack")
 	p.ack()
@@ -54,6 +55,7 @@ func _run() -> void:
 		return
 	_check(session.status() == "ready" and session.snapshot() == City.new().snapshot(), "fresh city published after ack")
 	var baseline: Dictionary = session.snapshot()
+	var first_bytes := p.payload
 	var cost: int = City.new().feed_cost("ray-1")
 	_check(session.stage_command("feed", "ray-1", "ui-1", int(baseline.revision), 0, marker), "real feed staged")
 	_check(session.status() == "saving" and session.snapshot() == baseline and session.last_result().is_empty(), "no early debit or success")
@@ -68,7 +70,7 @@ func _run() -> void:
 	var q := FakePort.new()
 	var reopened = Session.new()
 	_check(reopened.start(q), "reopen queued")
-	q.deliver({"kind": "open", "ok": true, "status": "ready", "active": bytes})
+	q.deliver({"kind": "open", "ok": true, "status": "ready", "active": bytes, "previous": first_bytes})
 	_check(reopened.poll(marker + 60000) and reopened.status() == "saving" and q.writes == 1, "resume stages offline settlement")
 	_check(reopened.snapshot().is_empty(), "resumed state waits for ack")
 	q.ack()
@@ -97,7 +99,7 @@ func _run() -> void:
 	refused.allow_write = false
 	var failed = Session.new()
 	failed.start(refused)
-	refused.deliver({"kind": "open", "ok": true, "status": "missing", "active": null})
+	refused.deliver({"kind": "open", "ok": true, "status": "missing", "active": null, "previous": null})
 	_check(not failed.poll(marker) and failed.status() == "unavailable", "synchronous write refusal fails closed")
 	_check(failed.snapshot().is_empty() and not failed.stage_tick(1, marker), "no blank city after refusal")
 	_check(not session.start(p) and session.snapshot() == saved, "open cannot reset a live city")
@@ -167,7 +169,7 @@ func _run_import_clock() -> void:
 		if not session.start(port):
 			_check(false, "foreign clock: open failed")
 			return
-		port.deliver({"kind":"open", "ok":true, "status":"missing", "active":null})
+		port.deliver({"kind":"open", "ok":true, "status":"missing", "active":null, "previous":null})
 		var opened: bool = session.poll(marker)
 		_check(opened, "foreign clock: fresh checkpoint staged")
 		if not opened:
@@ -178,6 +180,7 @@ func _run_import_clock() -> void:
 		if not ready:
 			return
 		var original: Dictionary = session.snapshot()
+		var first_bytes := port.payload
 		var backup: Dictionary = JSON.parse_string(session.export_backup())
 		backup.wall_marker_ms = fixture[0]
 		var encoded := JSON.stringify(backup, "", true, true)
@@ -202,7 +205,7 @@ func _run_import_clock() -> void:
 		if not reopened.start(second):
 			_check(false, "foreign clock: reopen failed")
 			return
-		second.deliver({"kind":"open", "ok":true, "status":"ready", "active":port.payload})
+		second.deliver({"kind":"open", "ok":true, "status":"ready", "active":port.payload, "previous":first_bytes})
 		var resumed: bool = reopened.poll(marker + 60000)
 		_check(resumed, "foreign clock: local resume staged")
 		if not resumed:
@@ -211,3 +214,19 @@ func _run_import_clock() -> void:
 		var resumed_ready: bool = reopened.poll(marker + 60000) and reopened.status() == "ready"
 		_check(resumed_ready and int(reopened.snapshot().get("elapsed_ms", -1)) == int(original.elapsed_ms) + 60000,
 			"foreign clock: one minute local absence settled")
+
+# A structurally valid envelope can still contain an unsupported city schema.
+func _run_previous_validation() -> void:
+	var marker := 1700000000000
+	var model: Dictionary = City.new().snapshot()
+	var active := JSON.stringify({"storage_revision": 2, "wall_marker_ms": marker, "model": model})
+	var future: Dictionary = model.duplicate(true)
+	future.checkpoint_schema = 3
+	var invalid := JSON.stringify({"storage_revision": 1, "wall_marker_ms": marker, "model": future})
+	for raw in [invalid, "damaged", null]:
+		var port := FakePort.new()
+		var session = Session.new()
+		session.start(port)
+		port.deliver({"kind":"open", "ok":true, "status":"ready", "active":active, "previous":raw})
+		_check(not session.poll(marker) and session.status() == "unavailable" and port.writes == 0, "unsupported/missing predecessor refuses startup write")
+		_check(session.snapshot().is_empty() and not session.stage_tick(1, marker + 1), "unsupported predecessor does not publish or allow retry")

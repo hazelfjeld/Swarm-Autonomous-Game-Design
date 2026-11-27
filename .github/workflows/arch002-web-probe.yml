@@ -1207,9 +1207,9 @@ jobs:
               return result
           # Test-only fault injection. The live Godot writer must be unloaded
           # before corruption; inspect raw bytes rather than parsing bad JSON.
-          def raw_city_pair(corrupt_active=False):
-              result = api("POST", session + "/execute/async", {"args": [corrupt_active], "script": """
-                const corrupt = arguments[0], done = arguments[arguments.length - 1];
+          def raw_city_pair(corrupt_active=False, replacement=None):
+              result = api("POST", session + "/execute/async", {"args": [corrupt_active, replacement], "script": """
+                const corrupt = arguments[0], replacement = arguments[1], done = arguments[arguments.length - 1];
                 (async () => {
                   const name = "little-ray-city-checkpoint-v2";
                   const db = await new Promise((ok, bad) => {
@@ -1220,7 +1220,7 @@ jobs:
                   });
                   try {
                     return await new Promise((ok, bad) => {
-                      const t = db.transaction("profiles", corrupt ? "readwrite" : "readonly");
+                      const t = db.transaction("profiles", corrupt || replacement ? "readwrite" : "readonly");
                       const store = t.objectStore("profiles");
                       const a = store.get("active"), p = store.get("previous");
                       const badText = '{"fault":';
@@ -1230,9 +1230,12 @@ jobs:
                         if (typeof original.active !== "string" || typeof original.previous !== "string") {
                           t.abort(); return;
                         }
-                        if (corrupt) store.put(badText, "active");
+                        if (replacement) {
+                          store.put(replacement.active, "active");
+                          store.put(replacement.previous, "previous");
+                        } else if (corrupt) store.put(badText, "active");
                       };
-                      t.oncomplete = () => ok({original, observed: {
+                      t.oncomplete = () => ok({original, observed: replacement || {
                         active: corrupt ? badText : original.active, previous: original.previous}});
                       t.onabort = () => bad(t.error || new Error("Missing recovery pair"));
                       t.onerror = () => bad(t.error);
@@ -1425,9 +1428,32 @@ jobs:
                       "recovery_choice_implemented":False}
                   (evidence/"corrupt-city-observation.json").write_text(json.dumps(recovery_observation, indent=2))
                   print(json.dumps({"corrupt_city_fail_closed":"pass","recovery_choice_implemented":False}), flush=True)
+                  # Envelope-valid future-schema predecessor, with a valid active city.
+                  # A startup autosave must not silently rotate away unknown data.
+                  api("POST", session + "/url", {"url":inert_url})
+                  assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                  unsupported = json.loads(injected["original"]["previous"])
+                  assert unsupported["model"]["checkpoint_schema"] == 2
+                  unsupported["model"]["checkpoint_schema"] = 3
+                  future_pair = {"active":injected["original"]["active"],"previous":json.dumps(unsupported)}
+                  raw_city_pair(replacement=future_pair)
+                  assert raw_city_pair()["observed"] == future_pair
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "future previous loader")
+                  future_blocked = wait(blocked_city, "unsupported previous visibly unavailable")
+                  assert "Save unavailable" in future_blocked["footer"], future_blocked
+                  modal_click(830, 363)
+                  time.sleep(2)
+                  assert blocked_city() and raw_city_pair()["observed"] == future_pair
+                  api("POST", session + "/refresh", {})
+                  wait(bounds, "future previous reload")
+                  wait(blocked_city, "unsupported previous reload remains unavailable")
+                  assert raw_city_pair()["observed"] == future_pair, "Unsupported previous lost on reload"
+                  capture("13-future-previous-preserved")
+                  (evidence/"future-previous-observation.json").write_text(json.dumps({"active_preserved":True,"previous_preserved":True,"blocked":future_blocked}, indent=2))
                   report = {"persistent_city":"pass","browser":opened["capabilities"].get("browserVersion"),
                       "manifest":json.loads((root/"integration-manifest.json").read_text()),
-                      "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload","paid crop matures and harvests once","harvest persists after reload","portable city export and preview","explicit restore with previous-good","reload and command after restore","malformed active save fails closed and preserves previous-good"],
+                      "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload","paid crop matures and harvests once","harvest persists after reload","portable city export and preview","explicit restore with previous-good","reload and command after restore","malformed active save fails closed and preserves previous-good","unsupported previous schema fails closed and preserves both copies"],
                       "fresh":fresh,"planted":planted,"fed":fed,"collected":collected,"restored":restored,"after":after,
                       "before_harvest":before_harvest,"harvested":harvested,"harvest_reloaded":final,
                       "backup_exported":exported,"backup_before_restore":before_restore,"backup_replacement":replacement,

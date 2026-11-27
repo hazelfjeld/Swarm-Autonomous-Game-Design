@@ -72,7 +72,7 @@ export function createProfileTransport(db) {
   // Caller supplies the EXACT last validated active bytes (null ONLY for
   // verified empty storage) and the pending payload from profile_commit.gd.
   // Domain validation and writer lifetime are external prerequisites.
-  async function commit(expected, payload) {
+  async function commit(expected, payload, expectedPrevious = undefined) {
     if (unavailable || busy) return {ok: false, status: "unavailable"};
     const before = expected === null ? null : envelope(expected);
     const next = envelope(payload);
@@ -101,6 +101,10 @@ export function createProfileTransport(db) {
           const activePresent = activeKey.result !== undefined;
           const previousPresent = previousKey.result !== undefined;
           if (expected === null ? activePresent || previousPresent : !activePresent || actual !== expected) return;
+          // When a session supplied the validated predecessor, compare its exact bytes too.
+          // null represents verified absence; undefined is the low-level legacy API.
+          if (expectedPrevious !== undefined && (previousPresent !== (expectedPrevious !== null) ||
+              (previousPresent && previous.result !== expectedPrevious))) return;
           if (expected !== null && ((previousPresent && previous.result === undefined) ||
               !validPair(actual, previous.result))) return;
           try {
@@ -131,7 +135,7 @@ export async function openProfileSession(name, {
   timeoutMs = 5000, locks = globalThis.navigator?.locks,
   dbFactory = globalThis.indexedDB
 } = {}) {
-  let state = "opening", db = null, transport = null, expected = null;
+  let state = "opening", db = null, transport = null, expected = null, expectedPrevious = null;
   let initial = null, releaseLock, ownerTask;
   const unavailable = reason => ({ok: false, status: "unavailable", reason});
   const held = new Promise(resolve => { releaseLock = resolve; });
@@ -175,10 +179,11 @@ export async function openProfileSession(name, {
       if (state !== "ready") return {ok: false, status: state};
       state = "saving";
       try {
-        const result = await deadline(transport.commit(expected, payload));
+        const result = await deadline(transport.commit(expected, payload, expectedPrevious));
         if (state !== "saving") return unavailable("Session invalidated; reload to reconcile.");
         if (!result.ok || result.observed_text !== payload)
           return fail(result.reason || "Write could not be confirmed; reload to reconcile.");
+        expectedPrevious = expected;
         expected = result.observed_text;
         state = "ready";
         return result;
@@ -225,6 +230,7 @@ export async function openProfileSession(name, {
           initial = result;
           if (result.ok) {
             expected = result.active;
+            expectedPrevious = result.previous;
             state = "ready";
           } else fail(result.reason || "Profile read failed.");
         } catch (_) { fail("Profile database unavailable."); }
@@ -270,7 +276,7 @@ export function createGodotProfilePort(openSession) {
           return;
         }
         finish({kind: "open", ok: true, status: initial.status,
-                active: initial.active}, "ready");
+                active: initial.active, previous: initial.previous}, "ready");
       }).catch(() => fail("open"));
       return true;
     },

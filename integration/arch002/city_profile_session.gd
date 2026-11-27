@@ -85,7 +85,7 @@ func poll(observed_wall_ms: int) -> bool:
 			_fail()
 			return false
 		var city = City.new()
-		if reply.get("status") == "missing" and reply.has("active") and reply.active == null:
+		if reply.get("status") == "missing" and reply.has_all(["active", "previous"]) and reply.active == null and reply.previous == null:
 			if not _boundary.initialize(city.snapshot(), 0, observed_wall_ms):
 				_fail()
 				return false
@@ -97,6 +97,13 @@ func poll(observed_wall_ms: int) -> bool:
 			_fail()
 			return false
 		var committed: Dictionary = _boundary.committed()
+		# A valid active city alone is insufficient: the next autosave rotates
+		# the previous copy. Validate the predecessor with the same domain
+		# contract before any write; unsupported data must remain untouched.
+		if not _valid_previous(reply, committed):
+			_fail()
+			_last_result = {"ok": false, "message": "Save unavailable. Previous save invalid or unsupported; both copies preserved."}
+			return false
 		if not city.restore_snapshot(committed.model):
 			_fail()
 			return false
@@ -118,6 +125,20 @@ func poll(observed_wall_ms: int) -> bool:
 	_pending_result = {}
 	_status = "ready"
 	return true
+
+func _valid_previous(reply: Dictionary, committed: Dictionary) -> bool:
+	if not reply.has("previous"):
+		return false
+	var generation: int = int(committed.storage_revision)
+	if generation <= 1:
+		return reply.previous == null
+	if not reply.previous is String:
+		return false
+	var predecessor = Commit.new(_valid_city)
+	if not predecessor.initialize_from_text(reply.previous):
+		return false
+	var previous: Dictionary = predecessor.committed()
+	return int(previous.storage_revision) == generation - 1 and int(previous.wall_marker_ms) <= int(committed.wall_marker_ms) and int(previous.model.revision) <= int(committed.model.revision)
 
 func _stage(candidate: Dictionary, wall_marker_ms: int, result: Dictionary) -> bool:
 	var generation: int = int(_boundary.committed().storage_revision)

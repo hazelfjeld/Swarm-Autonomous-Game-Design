@@ -36,6 +36,9 @@ const done = arguments[arguments.length - 1];
     check(!(await stale.commit(b, c)).ok, "conflicting instance fails closed");
     pair = await read();
     check(pair.active === b && pair.previous === a, "stale write preserved both records");
+    check(!(await create(db).commit(b, c, payload(1, 999))).ok, "exact previous bytes conflict refused");
+    pair = await read();
+    check(pair.active === b && pair.previous === a, "previous conflict preserved both records");
 
     // Abort a genuine readwrite transaction after the active put succeeded,
     // before transaction completion. Only the fixture facade is instrumented.
@@ -238,10 +241,15 @@ const done = arguments[arguments.length - 1];
     const reopenedMailbox = createPort(() => openSession(mailboxName));
     reopenedMailbox.begin_open();
     const loadedMailbox = await awaitMessage(reopenedMailbox);
-    check(loadedMailbox.ok && loadedMailbox.active === a, "mailbox reload observes exact bytes");
+    check(loadedMailbox.ok && loadedMailbox.active === a && loadedMailbox.previous === null, "mailbox reload observes exact bytes and absent predecessor");
     reopenedMailbox.begin_write(b);
     check((await awaitMessage(reopenedMailbox)).observed_text === b, "mailbox successor saves next generation");
     await reopenedMailbox.close();
+    const pairMailbox = createPort(() => openSession(mailboxName));
+    pairMailbox.begin_open();
+    const loadedPair = await awaitMessage(pairMailbox);
+    check(loadedPair.ok && loadedPair.active === b && loadedPair.previous === a, "mailbox forwards exact predecessor bytes");
+    await pairMailbox.close();
     indexedDB.deleteDatabase(mailboxName);
 
     return {profile_transport: "pass", checks, actual_site_verified: false};

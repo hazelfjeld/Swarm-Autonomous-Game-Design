@@ -861,14 +861,14 @@ jobs:
       - name: Checkout exact city validation seam (independent input)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: e7836376bfea8b3433d6bd9b76ef0bfc9cc06d87
+          ref: 86dfae380da10cc189bc3523ace9488378557b3f
           path: .arch002-city-source
           persist-credentials: false
       - name: Native city and staged-profile roundtrip (not hosted)
         timeout-minutes: 4
         run: |
           set -euo pipefail
-          test "$(git -C .arch002-city-source rev-parse HEAD)" = "e7836376bfea8b3433d6bd9b76ef0bfc9cc06d87"
+          test "$(git -C .arch002-city-source rev-parse HEAD)" = "86dfae380da10cc189bc3523ace9488378557b3f"
           project="$RUNNER_TEMP/arch002-city-integration"
           mkdir -p "$project"
           cp -a .arch002-city-source/game/city_checkpoint/. "$project/"
@@ -904,6 +904,9 @@ jobs:
           var presses: Dictionary = {"plant": 0, "feed": 0, "collect": 0, "harvest": 0, "backup": 0}
           var downs: Dictionary = {"plant": 0, "feed": 0, "collect": 0, "harvest": 0, "backup": 0}
           var backup_button: Button
+          var backup_heading: Label
+          var recovery_heading: Label
+          var integration_layout_key: String = ""
           var backup_panel: ColorRect
           var backup_text: TextEdit
           var backup_help: Label
@@ -964,11 +967,11 @@ jobs:
               backup_panel.mouse_filter = Control.MOUSE_FILTER_STOP
               layer.add_child(backup_panel)
               backup_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-              var heading := Label.new()
-              heading.text = "CITY BACKUP  /  Restore saved progress"
-              heading.position = Vector2(100, 95)
-              heading.add_theme_font_size_override("font_size", 30)
-              backup_panel.add_child(heading)
+              backup_heading = Label.new()
+              backup_heading.text = "CITY BACKUP  /  Restore saved progress"
+              backup_heading.position = Vector2(100, 95)
+              backup_heading.add_theme_font_size_override("font_size", 30)
+              backup_panel.add_child(backup_heading)
               backup_help = Label.new()
               backup_help.text = "Export JSON and copy it somewhere safe. Paste a backup and preview it.\nReplacement keeps your last confirmed city as a recovery copy."
               backup_help.autowrap_mode = TextServer.AUTOWRAP_OFF
@@ -1019,7 +1022,9 @@ jobs:
               backup_preview.disabled = false
               backup_close.disabled = false
               invalidate_backup_preview()
-              backup_text.grab_focus()
+              # Opening a modal on touch must not summon the soft keyboard.
+              if not city.compact_mode:
+                  backup_text.grab_focus()
 
           func backup_input_changed() -> void:
               # A programmatic export may emit a deferred text_changed signal.
@@ -1118,11 +1123,11 @@ jobs:
               recovery_panel.mouse_filter = Control.MOUSE_FILTER_STOP
               layer.add_child(recovery_panel)
               recovery_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-              var heading := Label.new()
-              heading.text = "Recover your saved city"
-              heading.position = Vector2(100, 100)
-              heading.add_theme_font_size_override("font_size", 34)
-              recovery_panel.add_child(heading)
+              recovery_heading = Label.new()
+              recovery_heading.text = "Recover your saved city"
+              recovery_heading.position = Vector2(100, 100)
+              recovery_heading.add_theme_font_size_override("font_size", 34)
+              recovery_panel.add_child(recovery_heading)
               recovery_message = Label.new()
               recovery_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
               recovery_message.position = Vector2(100, 205)
@@ -1144,6 +1149,104 @@ jobs:
               recovery_reload.pressed.connect(reload_recovery)
               recovery_panel.add_child(recovery_reload)
               recovery_panel.hide()
+
+
+          # Integration owns these controls. Reuse the city's existing Book page
+          # rather than covering map or navigation controls at compact sizes.
+          # All modal coordinates use unscaled viewport units; desktop is unchanged.
+          func place_control(control: Control, x: float, y: float, w: float, h: float) -> void:
+              control.position = Vector2(x, y)
+              control.size = Vector2(w, h)
+
+          func layout_integration_ui() -> void:
+              var viewport: Vector2 = city.size
+              var compact: bool = city.compact_mode
+              var key := "%s/%s/%s" % [viewport, compact, city.compact_page]
+              if key == integration_layout_key:
+                  return
+              integration_layout_key = key
+              var w: float = viewport.x - 16.0
+              var h: float = viewport.y
+              var actions: Array[Button] = [backup_export, backup_preview, backup_restore, backup_close]
+              if not compact:
+                  backup_button.text = "City backup / restore"
+                  backup_button.clip_text = false
+                  backup_button.show()
+                  place_control(backup_button, 800, 607, 268, 44)
+                  backup_heading.text = "CITY BACKUP  /  Restore saved progress"
+                  backup_heading.add_theme_font_size_override("font_size", 30)
+                  place_control(backup_heading, 100, 95, 900, 40)
+                  backup_help.autowrap_mode = TextServer.AUTOWRAP_OFF
+                  backup_help.add_theme_font_size_override("font_size", 18)
+                  place_control(backup_help, 100, 145, 900, 62)
+                  place_control(backup_text, 100, 235, 900, 335)
+                  backup_message.add_theme_font_size_override("font_size", 18)
+                  place_control(backup_message, 100, 585, 900, 80)
+                  for i in range(actions.size()):
+                      actions[i].clip_text = false
+                      actions[i].add_theme_font_size_override("font_size", 17)
+                      place_control(actions[i], 100 + 230 * i, 680, 210, 52)
+                  recovery_heading.add_theme_font_size_override("font_size", 34)
+                  place_control(recovery_heading, 100, 100, 900, 44)
+                  recovery_message.add_theme_font_size_override("font_size", 24)
+                  place_control(recovery_message, 100, 205, 900, 360)
+                  recovery_confirm.add_theme_font_size_override("font_size", 21)
+                  recovery_reload.add_theme_font_size_override("font_size", 21)
+                  place_control(recovery_confirm, 100, 650, 400, 70)
+                  place_control(recovery_reload, 600, 650, 400, 70)
+                  return
+              backup_button.text = "Backup / restore"
+              backup_button.clip_text = true
+              backup_button.visible = city.compact_page == 6
+              if backup_button.visible:
+                  # Book contains Collection, Favorite, Sale. Add the fourth
+                  # action in its unused grid slot (or the next portrait row).
+                  var sale: Rect2 = city.sell_button.get_rect()
+                  if w >= 580.0:
+                      place_control(backup_button, sale.end.x + 8.0, sale.position.y, sale.size.x, 48)
+                  else:
+                      place_control(backup_button, sale.position.x, sale.position.y + 56.0, sale.size.x, 48)
+              backup_heading.text = "City backup / restore"
+              backup_heading.add_theme_font_size_override("font_size", 20)
+              place_control(backup_heading, 8, 8, w, 28)
+              backup_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+              backup_help.add_theme_font_size_override("font_size", 14)
+              var help_height: float = 52.0 if w >= 740.0 else 72.0
+              place_control(backup_help, 8, 42, w, help_height)
+              var columns: int = 4 if w >= 740.0 else 2
+              var rows: int = 1 if columns == 4 else 2
+              var button_width: float = floorf((w - 8.0 * (columns - 1)) / columns)
+              var actions_top: float = h - 8.0 - (48.0 * rows + 8.0 * (rows - 1))
+              var message_top: float = actions_top - 110.0
+              var input_top: float = 50.0 + help_height
+              place_control(backup_text, 8, input_top, w, maxf(48.0, message_top - input_top - 8.0))
+              backup_message.add_theme_font_size_override("font_size", 14)
+              place_control(backup_message, 8, message_top, w, 102)
+              for i in range(actions.size()):
+                  actions[i].clip_text = true
+                  actions[i].add_theme_font_size_override("font_size", 14)
+                  place_control(actions[i], 8.0 + (i % columns) * (button_width + 8.0), actions_top + floori(float(i) / columns) * 56.0, button_width, 48)
+              recovery_heading.add_theme_font_size_override("font_size", 20)
+              place_control(recovery_heading, 8, 8, w, 30)
+              var recovery_rows: int = 1 if w >= 580.0 else 2
+              var recovery_top: float = h - 8.0 - (48.0 * recovery_rows + 8.0 * (recovery_rows - 1))
+              recovery_message.add_theme_font_size_override("font_size", 16)
+              place_control(recovery_message, 8, 46, w, recovery_top - 54.0)
+              recovery_confirm.add_theme_font_size_override("font_size", 16)
+              recovery_reload.add_theme_font_size_override("font_size", 16)
+              if recovery_rows == 1:
+                  var half: float = floorf((w - 8.0) / 2.0)
+                  place_control(recovery_confirm, 8, recovery_top, half, 48)
+                  place_control(recovery_reload, 16.0 + half, recovery_top, half, 48)
+              else:
+                  place_control(recovery_confirm, 8, recovery_top, w, 48)
+                  place_control(recovery_reload, 8, recovery_top + 56.0, w, 48)
+
+          func control_geometry(control: Control) -> Dictionary:
+              var rect: Rect2 = control.get_global_rect()
+              return {"rect": [rect.position.x, rect.position.y, rect.size.x, rect.size.y],
+                  "visible": control.is_visible_in_tree(),
+                  "minimum": [control.get_combined_minimum_size().x, control.get_combined_minimum_size().y]}
 
           func confirm_recovery() -> void:
               if recovery_confirmation.is_empty():
@@ -1189,6 +1292,8 @@ jobs:
               presses[kind] += 1
 
           func _process(_delta: float) -> void:
+              if backup_panel != null and recovery_panel != null:
+                  layout_integration_ui()
               if backup_panel != null:
                   process_backup()
               if recovery_panel != null:
@@ -1212,7 +1317,17 @@ jobs:
                   "downs": downs, "presses": presses,
                   "disabled": {"plant": city.plant_short.disabled, "feed": city.feed_button.disabled, "collect": city.collect_button.disabled, "harvest": city.harvest_button.disabled, "backup": backup_button.disabled},
                   "rects": {"plant": str(city.plant_short.get_global_rect()), "feed": str(city.feed_button.get_global_rect()), "collect": str(city.collect_button.get_global_rect()), "harvest": str(city.harvest_button.get_global_rect())},
-                  "viewport": str(city.get_viewport_rect().size)})
+                  "viewport": str(city.get_viewport_rect().size),
+                  "viewport_size": [city.size.x, city.size.y], "compact_page": city.compact_page,
+                  "layout_controls": {"book_tab": control_geometry(city.compact_nav[6]),
+                      "collection": control_geometry(city.collection_button), "favorite": control_geometry(city.favorite_button),
+                      "sale": control_geometry(city.sell_button), "backup": control_geometry(backup_button),
+                      "backup_heading": control_geometry(backup_heading), "help": control_geometry(backup_help),
+                      "input": control_geometry(backup_text), "message": control_geometry(backup_message),
+                      "export": control_geometry(backup_export), "preview": control_geometry(backup_preview),
+                      "restore": control_geometry(backup_restore), "close": control_geometry(backup_close),
+                      "recovery_heading": control_geometry(recovery_heading), "recovery_message": control_geometry(recovery_message),
+                      "recover": control_geometry(recovery_confirm), "reload": control_geometry(recovery_reload)}})
           GD
           cat > "$project/arch002_city_entry.tscn" <<'SCENE'
           [gd_scene load_steps=2 format=3]
@@ -1251,7 +1366,7 @@ jobs:
               "sha256": files, "actual_site_verified": False}, indent=2))
           PY
       - name: Exercise real city controls and reload in Chromium
-        timeout-minutes: 5
+        timeout-minutes: 8
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -1390,6 +1505,38 @@ jobs:
                   "parameters":{"pointerType":"mouse"},"actions":[
                       {"type":"pointerMove","duration":50,"origin":"viewport",
                        "x":round(b["x"]+b["width"]*x/1100),"y":round(b["y"]+b["height"]*y/880)},
+                      {"type":"pointerDown","button":0},{"type":"pause","duration":80},
+                      {"type":"pointerUp","button":0}]}]})
+
+          def compact_geometry(names, buttons=()):
+              v = view()
+              b = bounds()
+              assert v and b, (v, b)
+              width, height = v["viewport_size"]
+              sx, sy = b["width"]/width, b["height"]/height
+              boxes = {}
+              for name in names:
+                  g = v["layout_controls"][name]
+                  x, y, w, h = g["rect"]
+                  assert g["visible"] and x >= 0 and y >= 0 and x+w <= width+.01 and y+h <= height+.01, (name, g, width, height)
+                  assert w >= g["minimum"][0]-.01 and h >= g["minimum"][1]-.01, (name, g)
+                  if name in buttons:
+                      assert w*sx >= 44 and h*sy >= 44, (name, g, sx, sy)
+                  boxes[name] = (x,y,w,h)
+              for index, (a, (x,y,w,h)) in enumerate(boxes.items()):
+                  for n, (xx,yy,ww,hh) in list(boxes.items())[index+1:]:
+                      assert min(x+w,xx+ww) <= max(x,xx) or min(y+h,yy+hh) <= max(y,yy), (a,n,boxes)
+              return boxes
+          def compact_click(name):
+              g = view()["layout_controls"][name]
+              assert g["visible"], (name, g)
+              x,y,w,h = g["rect"]
+              width,height = view()["viewport_size"]
+              b = bounds()
+              api("POST", session + "/actions", {"actions": [{"type":"pointer","id":"mouse",
+                  "parameters":{"pointerType":"mouse"},"actions":[
+                      {"type":"pointerMove","duration":50,"origin":"viewport",
+                       "x":round(b["x"]+b["width"]*(x+w/2)/width),"y":round(b["y"]+b["height"]*(y+h/2)/height)},
                       {"type":"pointerDown","button":0},{"type":"pause","duration":80},
                       {"type":"pointerUp","button":0}]}]})
           def observe(predicate, label, seconds=35):
@@ -1601,7 +1748,72 @@ jobs:
                   assert raw_city_pair()["archive"] == restored_pair["archive"]
                   capture("16-recovery-reloaded")
                   (evidence/"recovery-confirmed-observation.json").write_text(json.dumps({"status":"pass","recovered":recovered,"archive_preserved":True,"reopened":True}, indent=2))
+
+                  # The desktop path above is retained verbatim. Test the same
+                  # player-visible backup/recovery boundaries in both compact
+                  # orientations using actual rendered control rectangles.
+                  compact_observations = []
+                  for width, height in ((390,844),(844,390)):
+                      tag = f"{width}x{height}"
+                      api("POST", session + "/goog/cdp/execute", {"cmd":"Emulation.setDeviceMetricsOverride",
+                          "params":{"width":width,"height":height,"deviceScaleFactor":1,"mobile":False}})
+                      wait(lambda: (v if (v := view()) and v["viewport_size"] == [width,height] and v["layout_controls"]["book_tab"]["visible"] else None), "compact layout "+tag)
+                      compact_geometry(["book_tab"], ["book_tab"])
+                      compact_click("book_tab")
+                      wait(lambda: view()["compact_page"] == 6 and view()["layout_controls"]["backup"]["visible"], "compact Book "+tag)
+                      book_rects = compact_geometry(["book_tab","collection","favorite","sale","backup"], ["book_tab","collection","favorite","sale","backup"])
+                      capture("compact-"+tag+"-book")
+                      wait(lambda: ready("backup"), "compact confirmed backup "+tag)
+                      compact_click("backup")
+                      wait(lambda: view()["backup_open"], "compact backup opened "+tag)
+                      compact_click("export")
+                      wait(lambda: view()["backup_message"].startswith("Confirmed backup exported"), "compact export "+tag)
+                      before = saved()["active"]
+                      compact_click("preview")
+                      wait(lambda: not view()["backup_restore_disabled"] and view()["backup_message"].startswith("Replace current city"), "compact preview "+tag)
+                      assert saved()["active"] == before, "compact preview mutated save"
+                      backup_rects = compact_geometry(["backup_heading","help","input","message","export","preview","restore","close"], ["export","preview","restore","close"])
+                      capture("compact-"+tag+"-preview")
+                      compact_click("restore")
+                      wait(lambda: view()["backup_message"] == "Backup restored." and view()["phase"] == "ready", "compact replacement "+tag)
+                      after_pair = saved()
+                      assert after_pair["previous"] == before
+                      assert after_pair["active"]["storage_revision"] == before["storage_revision"] + 1
+                      for k in ("gold","food","xp","individuals","receipts","farm_crops","elapsed_ms"):
+                          assert after_pair["active"]["model"][k] == before["model"][k], k
+                      compact_click("close")
+                      wait(lambda: not view()["backup_open"], "compact modal closed "+tag)
+                      api("POST", session + "/url", {"url":inert_url})
+                      assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                      fault = raw_city_pair(True)
+                      raw = fault["observed"]
+                      api("POST", session + "/url", {"url":url})
+                      wait(bounds, "compact corrupt loader "+tag)
+                      wait(recoverable_city, "compact explicit recovery "+tag)
+                      assert raw_city_pair()["observed"] == raw
+                      recovery_rects = compact_geometry(["recovery_heading","recovery_message","recover","reload"], ["recover","reload"])
+                      capture("compact-"+tag+"-recovery-preview")
+                      compact_click("recover")
+                      wait(recovered_city, "compact recovery acknowledged "+tag)
+                      restored_compact = raw_city_pair()
+                      previous = json.loads(raw["previous"])
+                      restored_model = dict(previous["model"])
+                      restored_model["revision"] += 1
+                      assert json.loads(restored_compact["observed"]["active"])["model"] == restored_model
+                      assert restored_compact["observed"]["previous"] == raw["previous"]
+                      assert json.loads(restored_compact["archive"]) == {"version":1,"activePresent":True,"previousPresent":True,**raw}
+                      compact_click("reload")
+                      wait(bounds, "compact recovery reload "+tag)
+                      wait(lambda: (v if (v := view()) and v["phase"] == "ready" and v["confirmed"] and not v["recovery_open"] else None), "compact recovered city ready "+tag)
+                      for k in ("gold","food","individuals","receipts"):
+                          assert saved()["active"]["model"][k] == restored_model[k], k
+                      assert raw_city_pair()["archive"] == restored_compact["archive"]
+                      capture("compact-"+tag+"-reloaded")
+                      compact_observations.append({"viewport":[width,height],"book":book_rects,"backup":backup_rects,"recovery":recovery_rects,"preview_preserved":True,"restored":True,"archive_preserved":True,"reopened":True})
+                      print(json.dumps({"compact_city_recovery":"pass","viewport":[width,height]}), flush=True)
+                  (evidence/"compact-backup-recovery.json").write_text(json.dumps(compact_observations,indent=2))
                   report = {"persistent_city":"pass","browser":opened["capabilities"].get("browserVersion"),
+                      "compact_backup_recovery":compact_observations,
                       "manifest":json.loads((root/"integration-manifest.json").read_text()),
                       "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload","paid crop matures and harvests once","harvest persists after reload","portable city export and preview","explicit restore with previous-good","reload and command after restore","malformed active save fails closed and preserves previous-good","unsupported previous schema fails closed and preserves both copies","explicit corrupted-save recovery preserves archive and reopens selected city"],
                       "fresh":fresh,"planted":planted,"fed":fed,"collected":collected,"restored":restored,"after":after,

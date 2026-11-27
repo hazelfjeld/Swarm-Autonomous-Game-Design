@@ -1,0 +1,235 @@
+{
+  "scope": "ART-002 trials only",
+  "source": "build-blueberry.mjs",
+  "provenance": "Original procedural geometry authored for this repository from GDD v2 textual constraints; no copied images, external art or generator credits. Intended for use/revision in this experiment; no independent commercial-license certification.",
+  "palette": {
+    "ink": "#243453",
+    "shadow": "#365985",
+    "mid": "#579ad1",
+    "light": "#86c7ec",
+    "glow": "#bce7f5",
+    "cream": "#fff0ca",
+    "belly": "#e4cfa4",
+    "pink": "#f2a3b4",
+    "eye": "#20263e",
+    "white": "#fffdf7"
+  },
+  "poses": [
+    {
+      "lift": 0,
+      "wing": 0,
+      "mouth": 0
+    },
+    {
+      "lift": 1,
+      "wing": 2,
+      "mouth": 0
+    },
+    {
+      "lift": 3,
+      "wing": 5,
+      "mouth": 1
+    },
+    {
+      "lift": 4,
+      "wing": 3,
+      "mouth": 1
+    },
+    {
+      "lift": 2,
+      "wing": -1,
+      "mouth": 0
+    },
+    {
+      "lift": 0,
+      "wing": 0,
+      "mouth": 0
+    }
+  ],
+  "frame_count": 6,
+  "frame_ms": 120,
+  "cycle_ms": 720,
+  "pivot_normalized": [
+    0.5,
+    0.5
+  ],
+  "display_canvas_css_px": [
+    96,
+    96
+  ],
+  "pixel": {
+    "source_cell": [
+      48,
+      48
+    ],
+    "strip": [
+      288,
+      48
+    ],
+    "filter": "nearest; integer 2x"
+  },
+  "cartoon": {
+    "source_cell": [
+      96,
+      96
+    ],
+    "strip": [
+      576,
+      96
+    ],
+    "filter": "linear for fractional scale; native 1x trial; 3x box supersampling"
+  },
+  "padding": "transparent border; do not atlas-extrude into neighboring frames; use region clipping; see measured bounds",
+  "cosmetics": "No mask files in this trial. Proposed separate top-body dorsal tint mask; never tint outline, cream underside, eye, or highlights. Growth stages keep shared pivot and silhouette; only hatchling-like trial here.",
+  "checks": {
+    "pixel": [
+      {
+        "frame": 0,
+        "bounds": [
+          4,
+          7,
+          43,
+          36
+        ],
+        "opaque": 576,
+        "partial": 0
+      },
+      {
+        "frame": 1,
+        "bounds": [
+          4,
+          6,
+          43,
+          37
+        ],
+        "opaque": 603,
+        "partial": 0
+      },
+      {
+        "frame": 2,
+        "bounds": [
+          4,
+          3,
+          43,
+          37
+        ],
+        "opaque": 630,
+        "partial": 0
+      },
+      {
+        "frame": 3,
+        "bounds": [
+          4,
+          4,
+          43,
+          36
+        ],
+        "opaque": 606,
+        "partial": 0
+      },
+      {
+        "frame": 4,
+        "bounds": [
+          4,
+          7,
+          43,
+          35
+        ],
+        "opaque": 569,
+        "partial": 0
+      },
+      {
+        "frame": 5,
+        "bounds": [
+          4,
+          7,
+          43,
+          36
+        ],
+        "opaque": 576,
+        "partial": 0
+      }
+    ],
+    "cartoon": [
+      {
+        "frame": 0,
+        "bounds": [
+          7,
+          14,
+          87,
+          74
+        ],
+        "opaque": 2213,
+        "partial": 230
+      },
+      {
+        "frame": 1,
+        "bounds": [
+          7,
+          11,
+          87,
+          75
+        ],
+        "opaque": 2289,
+        "partial": 234
+      },
+      {
+        "frame": 2,
+        "bounds": [
+          7,
+          6,
+          87,
+          76
+        ],
+        "opaque": 2401,
+        "partial": 243
+      },
+      {
+        "frame": 3,
+        "bounds": [
+          7,
+          7,
+          87,
+          73
+        ],
+        "opaque": 2324,
+        "partial": 239
+      },
+      {
+        "frame": 4,
+        "bounds": [
+          7,
+          13,
+          87,
+          71
+        ],
+        "opaque": 2177,
+        "partial": 222
+      },
+      {
+        "frame": 5,
+        "bounds": [
+          7,
+          14,
+          87,
+          74
+        ],
+        "opaque": 2213,
+        "partial": 230
+      }
+    ]
+  },
+  "measured_render_ms": 5308,
+  "repeat_build": "All 3 PNG outputs byte identical in this run",
+  "files": {
+    "blueberry-pixel.png": {
+      "bytes": 5305
+    },
+    "blueberry-cartoon.png": {
+      "bytes": 13531
+    },
+    "frame-review.png": {
+      "bytes": 54264
+    }
+  }
+}

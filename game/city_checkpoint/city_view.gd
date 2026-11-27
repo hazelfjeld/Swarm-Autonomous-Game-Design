@@ -9,6 +9,8 @@ const OPENING_MAP_ZOOM: float = 0.94
 const EXPANDED_MAP_ZOOM: float = 0.72
 const GOLD_MARKER_OFFSET := Vector2(41, -33)
 const GOLD_MARKER_RADIUS: float = 14.0
+# Native design units; the served CSS transform must be verified separately.
+const MIN_CONTROL_TARGET: float = 44.0
 var city = Model.new()
 var adapter = Adapter.new()
 # Optional architect-owned session, injected before this view enters the tree.
@@ -92,7 +94,7 @@ func button_at(value: String, position_: Vector2, action: Callable) -> Button:
 	var item := Button.new()
 	item.text = value
 	item.position = position_
-	item.size = Vector2(310, 42)
+	item.size = Vector2(310, MIN_CONTROL_TARGET)
 	item.add_theme_font_size_override("font_size", 18)
 	item.pressed.connect(action)
 	add_child(item)
@@ -117,8 +119,8 @@ func _ready() -> void:
 	ray_title = label_at("BLUEBERRY  /  TIDE · COMMON", Vector2(758, 116), Vector2(320, 30), 20)
 	ray_info = label_at("", Vector2(758, 148), Vector2(320, 50), 16)
 	name_edit = LineEdit.new()
-	name_edit.position = Vector2(758, 205)
-	name_edit.size = Vector2(310, 34)
+	name_edit.position = Vector2(758, 200)
+	name_edit.size = Vector2(310, MIN_CONTROL_TARGET)
 	name_edit.max_length = 24
 	name_edit.text = city.nickname
 	name_edit.text_submitted.connect(func(value: String): act("rename", selected_ray + ":" + value))
@@ -132,11 +134,11 @@ func _ready() -> void:
 	level_button.size = Vector2(151, 44)
 	level_button.add_theme_font_size_override("font_size", 15)
 	farm_choice = OptionButton.new()
-	farm_choice.position = Vector2(758, 398)
-	farm_choice.size = Vector2(310, 28)
+	farm_choice.position = Vector2(758, 390)
+	farm_choice.size = Vector2(310, MIN_CONTROL_TARGET)
 	farm_choice.item_selected.connect(choose_farm)
 	add_child(farm_choice)
-	farm_info = label_at("", Vector2(758, 427), Vector2(320, 25), 16)
+	farm_info = label_at("", Vector2(758, 435), Vector2(320, 22), 16)
 	plant_short = button_at("Sprout Kelp · 20 G · 40 F · 1m", Vector2(758, 459), func(): act("plant", selected_farm + ":sprout"))
 	plant_long = button_at("Ribbon Kelp · 100 G · 180 F · 5m", Vector2(758, 507), func(): act("plant", selected_farm + ":ribbon"))
 	harvest_button = button_at("Harvest crop", Vector2(758, 555), func(): act("harvest", selected_farm))
@@ -144,15 +146,15 @@ func _ready() -> void:
 	build_choice.position = Vector2(30, 570)
 	build_choice.fit_to_longest_item = false
 	build_choice.clip_text = true
-	build_choice.size = Vector2(215, 42)
+	build_choice.size = Vector2(215, MIN_CONTROL_TARGET)
 	add_child(build_choice)
 	coordinate_x = coordinate_at(Vector2(250, 570), "X ", 3)
 	coordinate_y = coordinate_at(Vector2(330, 570), "Y ", 0)
 	build_button = button_at("Confirm placement", Vector2(410, 570), place_selected)
-	build_button.size = Vector2(174, 42)
+	build_button.size = Vector2(174, MIN_CONTROL_TARGET)
 	build_button.add_theme_font_size_override("font_size", 15)
 	cancel_build_button = button_at("Cancel build", Vector2(590, 570), func(): act("cancel_build", ""))
-	cancel_build_button.size = Vector2(142, 42)
+	cancel_build_button.size = Vector2(142, MIN_CONTROL_TARGET)
 	cancel_build_button.add_theme_font_size_override("font_size", 15)
 	map_mode_button = button_at("Map: tend / collect", Vector2(30, 145), toggle_map_mode)
 	map_mode_button.size = Vector2(250, 44)
@@ -195,9 +197,9 @@ func _ready() -> void:
 	collection_dialog.ok_button_text = "Back to island"
 	add_child(collection_dialog)
 	favorite_button = button_at("Mark favorite", Vector2(30, 830), func(): act("set_favorite", selected_ray + (",0" if city.individuals[selected_ray].get("favorite", false) else ",1")))
-	favorite_button.size = Vector2(210, 42)
+	favorite_button.size = Vector2(210, MIN_CONTROL_TARGET)
 	sell_button = button_at("Review sale", Vector2(250, 830), preview_sale)
-	sell_button.size = Vector2(235, 42)
+	sell_button.size = Vector2(235, MIN_CONTROL_TARGET)
 	sale_note = label_at("", Vector2(500, 830), Vector2(570, 42), 15)
 	sale_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	sale_dialog = ConfirmationDialog.new()
@@ -311,7 +313,7 @@ func refresh_roster() -> void:
 func coordinate_at(at: Vector2, prefix_text: String, initial: int) -> SpinBox:
 	var field := SpinBox.new()
 	field.position = at
-	field.size = Vector2(76, 42)
+	field.size = Vector2(76, MIN_CONTROL_TARGET)
 	field.min_value = 0
 	field.max_value = 7
 	field.step = 1
@@ -1022,6 +1024,22 @@ func map_layout_fixture_ok() -> bool:
 					return false
 	return true
 
+func desktop_control_targets_ok() -> bool:
+	# Test actual rectangles after theme minimums and layout have settled.
+	# This is a native desktop fixture, not a claim about CSS or touch hardware.
+	var controls: Array[Control] = [name_edit, sample_button, collect_button, feed_button, level_button, farm_choice, plant_short, plant_long, harvest_button, build_choice, coordinate_x, coordinate_y, build_button, cancel_build_button, map_mode_button, cancel_preview_button, ray_choice, habitat_choice, move_ray_button, upgrade_button, shop_choice, buy_button, place_egg_button, collection_button, favorite_button, sell_button]
+	var bounds := get_viewport_rect()
+	for i in range(controls.size()):
+		var rect := controls[i].get_global_rect()
+		if rect.size.x < MIN_CONTROL_TARGET or rect.size.y < MIN_CONTROL_TARGET or not bounds.encloses(rect):
+			push_error("City desktop control target too small or clipped: %s" % controls[i].name)
+			return false
+		for j in range(i):
+			if rect.intersects(controls[j].get_global_rect()):
+				push_error("City desktop controls overlap: %s / %s" % [controls[i].name, controls[j].name])
+				return false
+	return true
+
 func capture_fixture(directory: String) -> void:
 	# CI-only native GUI fixture; no acceleration in normal play.
 	await get_tree().process_frame
@@ -1029,6 +1047,10 @@ func capture_fixture(directory: String) -> void:
 	if get_viewport().get_texture().get_image().save_png(directory + "/01-opening.png") != OK:
 		get_tree().quit(1)
 		return
+	if not desktop_control_targets_ok():
+		get_tree().quit(1)
+		return
+	print("CITY_DESKTOP_TARGETS_PASS: 26 native control bounds at least 44 units, inside viewport, pairwise non-overlapping")
 	if not map_layout_fixture_ok():
 		push_error("Opening map header or cell projection regression")
 		get_tree().quit(1)

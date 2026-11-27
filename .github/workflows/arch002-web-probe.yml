@@ -807,7 +807,7 @@ jobs:
                   (evidence / "profile-transport-observation.json").write_text(json.dumps(transport_result, indent=2))
                   print(json.dumps(transport_result), flush=True)
                   assert transport_result.get("profile_transport") == "pass", transport_result
-                  assert len(transport_result.get("checks", [])) == 72, transport_result
+                  assert len(transport_result.get("checks", [])) == 75, transport_result
                   api("DELETE", session)
                   session = None
           finally:

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": "architect-2026-11-27T21:07:36.137Z-0d3y5yskrj",
+  "run_id": null,
   "generation": 99,
-  "acquired_at": "2026-11-27T21:07:36.137Z",
-  "expires_at": "2026-11-27T21:37:36.137Z"
+  "acquired_at": null,
+  "expires_at": null
 }

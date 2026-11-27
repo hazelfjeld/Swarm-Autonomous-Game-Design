@@ -1166,7 +1166,7 @@ jobs:
                       if not preview.get("ok", false):
                           return
                       recovery_confirmation = str(preview.confirmation)
-                      recovery_message.text = "The latest save is damaged. A validated earlier city is available.\\n\\n%d Gold · %d Food · %d XP · %d rays\\nSaved revision %d\\n\\nRestoring may lose newer progress. The original damaged records will be archived. No changes occur until you confirm." % [preview.gold, preview.food, preview.xp, preview.individual_count, preview.domain_revision]
+                      recovery_message.text = "The latest save is damaged. A validated earlier city is available.\n\n%d Gold · %d Food · %d XP · %d rays\nSaved revision %d\n\nRestoring may lose newer progress. The original damaged records will be archived. No changes occur until you confirm." % [preview.gold, preview.food, preview.xp, preview.individual_count, preview.domain_revision]
                       recovery_panel.show()
                       recovery_reload.grab_focus()
                   recovery_confirm.disabled = recovery_confirmation.is_empty()

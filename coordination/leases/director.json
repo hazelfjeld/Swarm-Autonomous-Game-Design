@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "director",
-  "generation": 153,
-  "run_id": null,
-  "acquired_at": null,
-  "expires_at": null
+  "generation": 154,
+  "run_id": "director-mountain-mover-20261127T2352Z-capacity-package",
+  "acquired_at": "2026-11-27T23:53:45.309Z",
+  "expires_at": "2026-11-28T00:23:45.309Z"
 }

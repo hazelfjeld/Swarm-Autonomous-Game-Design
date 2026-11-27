@@ -1205,6 +1205,44 @@ jobs:
               if result and "error" in result:
                   raise AssertionError(result)
               return result
+          # Test-only fault injection. The live Godot writer must be unloaded
+          # before corruption; inspect raw bytes rather than parsing bad JSON.
+          def raw_city_pair(corrupt_active=False):
+              result = api("POST", session + "/execute/async", {"args": [corrupt_active], "script": """
+                const corrupt = arguments[0], done = arguments[arguments.length - 1];
+                (async () => {
+                  const name = "little-ray-city-checkpoint-v2";
+                  const db = await new Promise((ok, bad) => {
+                    const r = indexedDB.open(name);
+                    r.onsuccess = () => ok(r.result);
+                    r.onerror = () => bad(r.error);
+                    r.onupgradeneeded = () => r.transaction.abort();
+                  });
+                  try {
+                    return await new Promise((ok, bad) => {
+                      const t = db.transaction("profiles", corrupt ? "readwrite" : "readonly");
+                      const store = t.objectStore("profiles");
+                      const a = store.get("active"), p = store.get("previous");
+                      const badText = '{"fault":';
+                      let original;
+                      p.onsuccess = () => {
+                        original = {active: a.result, previous: p.result};
+                        if (typeof original.active !== "string" || typeof original.previous !== "string") {
+                          t.abort(); return;
+                        }
+                        if (corrupt) store.put(badText, "active");
+                      };
+                      t.oncomplete = () => ok({original, observed: {
+                        active: corrupt ? badText : original.active, previous: original.previous}});
+                      t.onabort = () => bad(t.error || new Error("Missing recovery pair"));
+                      t.onerror = () => bad(t.error);
+                    });
+                  } finally { db.close(); }
+                })().then(done, e => done({error: String(e)}));
+              """})
+              assert result and "error" not in result, result
+              return result
+
           def bounds():
               return js("const c=document.querySelector('canvas'); return c && c.width && !document.getElementById('status') ? c.getBoundingClientRect().toJSON() : null;")
           trace = []
@@ -1347,9 +1385,49 @@ jobs:
                   post_backup_feed = observe(lambda m: m["food"] < exported["model"]["food"], "ordinary command after restore")
                   assert len(post_backup_feed["active"]["model"]["receipts"]) == len(exported["model"]["receipts"]) + 1
                   capture("10-city-backup-reloaded-fed")
+                  # Fault injection only in this disposable browser profile. Unload
+                  # the game first to end its writer session before changing bytes.
+                  inert_url = url.split("/index.html", 1)[0] + "/integration-manifest.json"
+                  api("POST", session + "/url", {"url":inert_url})
+                  assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                  injected = raw_city_pair(True)
+                  corrupt_pair = raw_city_pair()["observed"]
+                  assert corrupt_pair == injected["observed"]
+                  assert corrupt_pair["previous"] == injected["original"]["previous"]
+                  assert corrupt_pair["active"] != injected["original"]["active"]
+                  original_active = json.loads(injected["original"]["active"])
+                  for key in ("gold", "food", "xp", "individuals", "receipts", "farm_crops"):
+                      assert original_active["model"][key] == post_backup_feed["active"]["model"][key], key
+                  assert isinstance(json.loads(corrupt_pair["previous"])["model"], dict)
+                  # Ordinary startup must not auto-reset or silently grant a blank city.
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "corrupt city loader")
+                  def blocked_city():
+                      v = view()
+                      return v if v and v["phase"] == "unavailable" and v["overlay"] and not v["confirmed"] else None
+                  blocked = wait(blocked_city, "corrupt city visibly unavailable")
+                  assert "Save unavailable" in blocked["footer"], blocked
+                  assert blocked["disabled"]["backup"]
+                  capture("11-corrupt-city-blocked")
+                  modal_click(830, 363)
+                  time.sleep(2)
+                  assert blocked_city(), "Corrupt city unexpectedly playable"
+                  assert raw_city_pair()["observed"] == corrupt_pair, "Blocked city overwrote recovery bytes"
+                  api("POST", session + "/refresh", {})
+                  wait(bounds, "corrupt city reload")
+                  blocked_reload = wait(blocked_city, "corrupt reload remains unavailable")
+                  assert "Save unavailable" in blocked_reload["footer"], blocked_reload
+                  assert raw_city_pair()["observed"] == corrupt_pair, "Reload overwrote recovery bytes"
+                  capture("12-corrupt-city-reload-blocked")
+                  recovery_observation = {"active_preserved":True,"previous_preserved":True,
+                      "blocked":blocked,"blocked_reload":blocked_reload,
+                      "previous_storage_revision":json.loads(corrupt_pair["previous"])["storage_revision"],
+                      "recovery_choice_implemented":False}
+                  (evidence/"corrupt-city-observation.json").write_text(json.dumps(recovery_observation, indent=2))
+                  print(json.dumps({"corrupt_city_fail_closed":"pass","recovery_choice_implemented":False}), flush=True)
                   report = {"persistent_city":"pass","browser":opened["capabilities"].get("browserVersion"),
                       "manifest":json.loads((root/"integration-manifest.json").read_text()),
-                      "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload","paid crop matures and harvests once","harvest persists after reload","portable city export and preview","explicit restore with previous-good","reload and command after restore"],
+                      "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload","paid crop matures and harvests once","harvest persists after reload","portable city export and preview","explicit restore with previous-good","reload and command after restore","malformed active save fails closed and preserves previous-good"],
                       "fresh":fresh,"planted":planted,"fed":fed,"collected":collected,"restored":restored,"after":after,
                       "before_harvest":before_harvest,"harvested":harvested,"harvest_reloaded":final,
                       "backup_exported":exported,"backup_before_restore":before_restore,"backup_replacement":replacement,

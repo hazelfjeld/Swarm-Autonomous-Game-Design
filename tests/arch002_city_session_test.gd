@@ -135,7 +135,7 @@ func _run() -> void:
 	invalid_backup = decoded.duplicate(true)
 	invalid_backup.storage_revision = 99
 	_check(not session.preview_backup(JSON.stringify(invalid_backup)).ok, "local generation injection refused")
-	_check(not session.preview_backup("{").ok and not session.preview_backup("x".repeat(1048577)).ok, "malformed and oversized backups refused")
+	_check(not session.preview_backup("{").ok and not session.preview_backup("x".repeat(Session.MAX_BACKUP_BYTES + 1)).ok, "malformed and oversized backups refused")
 	_check(session.snapshot() == saved and p.writes == 2, "preview is side-effect free")
 	_check(reopened.export_backup().is_empty() and failed.export_backup().is_empty() and readonly_session.export_backup().is_empty(), "unconfirmed sessions cannot export")
 	_check(session.stage_tick(1, marker + 1) and session.export_backup().is_empty(), "in-flight checkpoint cannot export")
@@ -446,4 +446,42 @@ func _run_large_save_probe() -> void:
 	_check(large_ready, "large save: valid existing oversized profile must remain available")
 	_check(large_backup_ok, "large save: confirmed profile must have a valid portable backup")
 	_check(large_offered, "large save: valid oversized previous copy must offer explicit recovery")
+	# Exercise the actual restore and recovery staging paths above the old cap.
+	var restore_preview: Dictionary = large_session.preview_backup(large_backup)
+	var restored: bool = large_backup_ok and large_session.stage_restore(large_backup, str(restore_preview.get("confirmation", "")), marker)
+	if restored:
+		large_port.ack()
+		restored = large_session.poll(marker)
+	_check(restored and large_session.snapshot().get("receipts", {}) == upper.receipts, "large save: confirmed import retains all operation receipts")
+	var recovery_preview: Dictionary = large_recovery.preview_recovery()
+	var recovered: bool = large_offered and large_recovery.stage_recovery(str(recovery_preview.get("confirmation", "")), marker)
+	if recovered:
+		var recovered_model: Dictionary = upper.duplicate(true)
+		recovered_model.revision = int(recovered_model.revision) + 1
+		var observed := JSON.stringify({"storage_revision": 3, "wall_marker_ms": marker, "model": recovered_model}, "", true, true)
+		large_recovery_port.deliver({"kind":"recovery","ok":true,"status":"recovered","storage_revision":3,"observed_text":observed})
+		recovered = large_recovery.poll(marker)
+	_check(recovered and large_recovery.status() == "recovered" and large_recovery_port.recoveries == 1 and large_recovery_port.recovery_payload == upper_envelope, "large save: explicit recovery acknowledges exact predecessor")
+
+	# Extend the same real ledger past the new cap. No simulated production
+	# save is overwritten; verify rejection happens before the mailbox call.
+	for i in range(13001, 50001):
+		var argument := "ray-1,1" if i % 2 == 1 else "ray-1,0"
+		var result: Dictionary = city.command("set_favorite", argument, "ui-" + str(i), city.revision)
+		if not result.ok:
+			_check(false, "capacity admission: real favorite command refused at " + str(i))
+			return
+	var too_large: Dictionary = city.snapshot()
+	var too_large_backup := JSON.stringify({"format": Session.BACKUP_FORMAT, "version": Session.BACKUP_VERSION, "wall_marker_ms": marker, "model": too_large}, "", true, true)
+	var too_large_bytes := too_large_backup.to_utf8_buffer().size()
+	var valid_too_large: bool = City.validate_snapshot(too_large) and too_large.receipts.size() == 50000 and too_large_bytes > Session.MAX_BACKUP_BYTES
+	_check(valid_too_large, "capacity admission: real valid city exceeds new limit")
+	if restored and valid_too_large:
+		var before: Dictionary = large_session.snapshot()
+		var writes_before: int = large_port.writes
+		_check(not large_session.preview_backup(too_large_backup).ok and large_port.writes == writes_before, "capacity admission: oversized portable input refused without mutation")
+		_check(not large_session._stage(too_large, marker, {"ok":true}) and large_port.writes == writes_before and large_session.snapshot() == before and large_session.status() == "unavailable", "capacity admission: oversized valid stage refused before write; confirmed snapshot retained")
+	else:
+		_check(false, "capacity admission: valid prerequisites required")
+	print(JSON.stringify({"capacity_admission_probe": "observed", "limit_bytes": Session.MAX_BACKUP_BYTES, "valid_oversize_bytes": too_large_bytes, "valid_oversize_receipts": too_large.receipts.size(), "large_restore_acknowledged": restored, "large_recovery_acknowledged": recovered}))
 	print(JSON.stringify({"large_save_contract": "pass" if failures.is_empty() else "fail", "checks": checks, "failures": failures}))

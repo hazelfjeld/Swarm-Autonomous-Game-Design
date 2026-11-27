@@ -11,7 +11,7 @@ At every run read, in order:
 1. This file, `config/experiment.json`, and `config/skill_sources.json` from the current default branch.
 2. `docs/PROTOCOL.md`, `docs/BOARD.md`, `docs/SKILL_SOURCES.md`, and your role file.
 3. Your assigned issue, relevant recent comments, accepted decisions, and any existing branch/PR.
-4. The received GDD at its configured path, accepted design baseline, and scoped feature specification relevant to the task.
+4. The received GDD at its configured path, [creative-direction charter](docs/design/CREATIVE_DIRECTION.md), accepted design baseline, and scoped feature specification relevant to the task.
 5. Every SKILL.md assigned to your role from the explicit source repository/path at its pinned commit SHA, then required and task-relevant references/templates at that same SHA.
 
 ## Bound skill loading
@@ -24,7 +24,7 @@ At every run read, in order:
 
 ## Boundaries and readiness
 
-- The current Little Ray GDD is received at the configured path. V2.0 supersedes conflicting v1 sanctuary rules following the user correction in DIRECTOR-002 #22. DIRECTOR-001 #3 remains completed historical intake. Read the current design baseline and FIRST_SLICE map, including #23 and #24, and live issue dependencies; do not request the old attachment or repeat intake. Preserve compatible capability/runtime work.
+- The current Little Ray GDD is received at the configured path. V2.1 preserves the v2.0 mechanics and adds the DIRECTOR-003 unified-cute-manta/classic-collector [creative-direction charter](docs/design/CREATIVE_DIRECTION.md), following DIRECTOR-002 #22's replacement of the v1 sanctuary rules. The creative rendering treatment still needs ART-002 review and Hazel's choice; a design document is not accepted art or gameplay evidence. DIRECTOR-001 #3 remains completed historical intake. Read the current design baseline and FIRST_SLICE map, including #23 and #24, and live issue dependencies; do not request the old attachment or repeat intake. Preserve compatible capability/runtime work.
 - Only while live GDD status is actually `awaiting`, perform capability checks and coordination/infrastructure tasks only. Do not invent the game concept, mechanics, art direction, monetization, or game-specific acceptance criteria.
 - `paused` or `stopped` phase means do not begin new work. Check for this before remote mutations. Report a phase change once; avoid repetitive idle messages.
 - Each task has one accountable role, a stable ID, explicit dependencies, acceptance criteria, and a status. The director assigns and prioritizes work. Work on ready assigned tasks, resume your already-owned task, or accept an explicit review/integration handoff within your role. Reviewing another role's issue preserves its implementation owner.
@@ -46,6 +46,7 @@ At every run read, in order:
 - Report separately: implemented, static inspection, build succeeded, automated tests executed, interaction observed, and human playtested. Never imply one proves another.
 - Attach an exact commit SHA and actual commands/results to technical findings. QA evaluates the submitted artifact against its requirements, not just the implementer's summary.
 - Keep acceptance criteria stable during implementation. Propose a revision to the director if requirements are inconsistent; do not weaken them merely to make a task pass.
+- After DIRECTOR-003 acceptance, review art/UI/species/roster submissions against the charter's shared baby-manta anatomy, genre presentation and same-scale evidence gates. Do not assume a model-generated concept sheet proves an actual playable build or selects Hazel's favorite style; retain original asset provenance and existing feature dependencies.
 - Follow `templates/RUN_REPORT.md`. End with a useful artifact, a verified finding, a concrete blocker, or a justified no-change result. A run need not create a commit.
 - Share completion/blocker details in the task's issue. Use the message board for cross-role handoffs and decisions that affect others. Do not rewrite a shared transcript.
 - A failed or unavailable tool is a blocker or limitation, not evidence of successful work. Source code review alone does not establish that the game runs or is enjoyable.

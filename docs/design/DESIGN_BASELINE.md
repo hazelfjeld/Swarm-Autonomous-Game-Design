@@ -1,6 +1,6 @@
 # Little Ray design baseline
 
-Current working design: **GDD v2.0**, dated 23 November 2026. Owner: director. Revision: [DIRECTOR-002 #22](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/22). Read the [complete GDD](GDD.md), [source and archival record](SOURCE.md), and [first-slice assignments](FIRST_SLICE.md).
+Current working design: **GDD v2.1**, dated 25 November 2026 (mechanical baseline carried forward from v2.0, 23 November 2026). Owner: director. Revision: [DIRECTOR-002 #22](https://github.com/hazelfjeld/Swarm-Autonomous-Game-Design/issues/22). Read the [complete GDD](GDD.md), [source and archival record](SOURCE.md), and [first-slice assignments](FIRST_SLICE.md).
 
 ## Explicit direction correction
 
@@ -9,6 +9,12 @@ Hazel rejected the v1 cozy-sanctuary interpretation and requested a **Dragon Cit
 The working combination is Dragon City-style island economy and breeding with Monster Legends-style **three actors per side** in turn-based battles. Each actor has personal Stamina, equipped skills, cooldowns and Speed. The exact formulas, roster and staging are authored Little Ray proposals; they are not representations of undisclosed reference-game internals or measured balance.
 
 The GDD status remains **received**. The user's correction authorizes the revision and this genre direction; it does not mean every new tuning number has been individually approved or human-playtested.
+
+## Creative identity — DIRECTOR-003
+
+The [creative-direction charter](CREATIVE_DIRECTION.md) is a required companion to the GDD. Little Ray must feel like a classic colorful isometric Dragon City / DragonVale / Monster Legends-style creature collector: a busy habitat city, timed breeding and hatchery, Gold/Food decisions, nurturing, leveling, discovery, 3v3 encounters and land growth. MouseHunt is inspiration for *inventive collectibles and charm*, not an alternate gameplay structure. All rays—including Legendary designs—retain the same baby-manta snoot, friendly eyes, broad floppy wings, pale underside and tapering tail, with distinctive color/motif and restrained accents. The production choice between pixel and cartoon render treatments is still pending ART-002 #10 and Hazel's visual choice.
+
+**No reimplementation required by DIRECTOR-003:** v2.0 state contracts, economy/timer numbers, breeding probabilities, rarity power, battle mechanics, progression quantities, Godot/runtime scope and all role schedules are intentionally unchanged. The charter adds presentation and verification gates; existing role work and reviews remain valid for unaffected criteria. GDD v2.1 and this charter take effect after the required PR review and merge, not from an unreviewed draft branch.
 
 ## Governing experience and loop
 
@@ -60,6 +66,10 @@ Persist stable individuals, jobs, committed outcomes, receipts and profile revis
 GDD §19 explicitly replaces universal Tide housing, empty-home Pearls, automatic Food garden, cosmetic-only rarity, a single short nursery job, fixed home plots/unlimited Guest Cove, level-ten product ceiling, shared Energy/active-ray combat and a short final campaign. Historical v1 files remain archived and unchanged. Existing species keys and useful capability/runtime/art work remain valid.
 
 ARCH-002 and ART-002 continue their compatible bounded work. ART-003, GAMEPLAY-002/003 and QA-002 receive revised criteria; GAMEPLAY-004 separates breeding/hatching and GAMEPLAY-005 integrates the larger journey. Do not duplicate historical intake or startup tasks. Live issue dependencies determine Ready/Working status, and current config determines phase. Preserve intervening phase changes; this revision does not alter automations, skill pins or coordination authority.
+
+## Additional presentation gate
+
+ART-002 proves and selects one Blueberry treatment at actual size; ART-003 then delivers the *six-ray same-scale lineup* and populated city/3v3 contexts; GAMEPLAY-005/QA-002 verify an actual-player-control opening journey with classic collector readability. Detailed checks and evidence types are in [CREATIVE_DIRECTION.md](CREATIVE_DIRECTION.md). A pleasing concept image, automated DOM assertions or model rating alone does not certify runtime visuals or Hazel's taste approval.
 
 ## Evidence still needed
 

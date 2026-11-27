@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "director",
-  "generation": 139,
-  "run_id": null,
-  "acquired_at": null,
-  "expires_at": null
+  "generation": 140,
+  "run_id": "director-mountain-mover-20261127T1649Z-responsive-evidence",
+  "acquired_at": "2026-11-27T16:50:13.502Z",
+  "expires_at": "2026-11-27T17:20:13.502Z"
 }

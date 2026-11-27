@@ -911,6 +911,8 @@ jobs:
           var backup_text: TextEdit
           var backup_help: Label
           var backup_message: Label
+          var backup_body: ScrollContainer
+          var backup_stack: VBoxContainer
           var backup_export: Button
           var backup_preview: Button
           var backup_restore: Button
@@ -997,6 +999,19 @@ jobs:
               backup_restore = backup_control("Confirm replacement", 560, restore_backup_text)
               backup_close = backup_control("Back to city", 790, close_backup)
               backup_restore.disabled = true
+              # Compact body uses Godot's actual wrapped-label minimum sizes.
+              # Buttons remain outside the scroll region and never shrink.
+              backup_body = ScrollContainer.new()
+              backup_body.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+              backup_body.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+              backup_body.follow_focus = true
+              backup_panel.add_child(backup_body)
+              backup_stack = VBoxContainer.new()
+              backup_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+              backup_stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
+              backup_stack.add_theme_constant_override("separation", 8)
+              backup_body.add_child(backup_stack)
+              backup_body.hide()
               backup_panel.hide()
 
           func backup_control(label: String, x: int, action: Callable) -> Button:
@@ -1025,6 +1040,8 @@ jobs:
               # Opening a modal on touch must not summon the soft keyboard.
               if not city.compact_mode:
                   backup_text.grab_focus()
+              else:
+                  backup_body.scroll_vertical = 0
 
           func backup_input_changed() -> void:
               # A programmatic export may emit a deferred text_changed signal.
@@ -1056,6 +1073,8 @@ jobs:
               backup_confirmation = str(result.get("confirmation", ""))
               backup_restore.disabled = backup_confirmation.is_empty()
               backup_message.text = "Replace current city with: %d Gold, %d Food, %d XP, %d rays (revision %d)? This replaces progress; the previous save is retained." % [result.gold, result.food, result.xp, result.individual_count, result.domain_revision]
+              if city.compact_mode:
+                  backup_body.call_deferred("ensure_control_visible", backup_message)
 
           func restore_backup_text() -> void:
               if restore_pending or backup_confirmation.is_empty():
@@ -1158,6 +1177,19 @@ jobs:
               control.position = Vector2(x, y)
               control.size = Vector2(w, h)
 
+          func use_backup_body(compact: bool) -> void:
+              # Reparent only when crossing the desktop/compact breakpoint.
+              # Preserve the same TextEdit, confirmation and signal connections.
+              var target: Node = backup_stack if compact else backup_panel
+              var controls: Array[Control] = [backup_help, backup_text, backup_message]
+              for control in controls:
+                  if control.get_parent() != target:
+                      control.reparent(target, false)
+                  control.custom_minimum_size = Vector2.ZERO
+                  control.size_flags_horizontal = Control.SIZE_FILL
+                  control.size_flags_vertical = Control.SIZE_FILL
+              backup_body.visible = compact
+
           func layout_integration_ui() -> void:
               var viewport: Vector2 = city.size
               var compact: bool = city.compact_mode
@@ -1168,6 +1200,7 @@ jobs:
               var w: float = viewport.x - 16.0
               var h: float = viewport.y
               var actions: Array[Button] = [backup_export, backup_preview, backup_restore, backup_close]
+              use_backup_body(compact)
               if not compact:
                   backup_button.text = "City backup / restore"
                   backup_button.clip_text = false
@@ -1211,17 +1244,19 @@ jobs:
               place_control(backup_heading, 8, 8, w, 28)
               backup_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
               backup_help.add_theme_font_size_override("font_size", 14)
-              var help_height: float = 52.0 if w >= 740.0 else 72.0
-              place_control(backup_help, 8, 42, w, help_height)
               var columns: int = 4 if w >= 740.0 else 2
               var rows: int = 1 if columns == 4 else 2
               var button_width: float = floorf((w - 8.0 * (columns - 1)) / columns)
               var actions_top: float = h - 8.0 - (48.0 * rows + 8.0 * (rows - 1))
-              var message_top: float = actions_top - 110.0
-              var input_top: float = 50.0 + help_height
-              place_control(backup_text, 8, input_top, w, maxf(48.0, message_top - input_top - 8.0))
+              # VBox measures wrapped text rather than assuming a fixed height.
+              # The input takes spare height; when minimums exceed the budget,
+              # the body scrolls instead of overlapping the fixed action row.
+              backup_help.custom_minimum_size = Vector2(0, 52.0 if w >= 740.0 else 72.0)
+              backup_text.custom_minimum_size = Vector2(0, 48)
+              backup_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
               backup_message.add_theme_font_size_override("font_size", 14)
-              place_control(backup_message, 8, message_top, w, 102)
+              backup_message.custom_minimum_size = Vector2(0, 102)
+              place_control(backup_body, 8, 42, w, maxf(1.0, actions_top - 50.0))
               for i in range(actions.size()):
                   actions[i].clip_text = true
                   actions[i].add_theme_font_size_override("font_size", 14)
@@ -1772,6 +1807,10 @@ jobs:
                       compact_click("preview")
                       wait(lambda: not view()["backup_restore_disabled"] and view()["backup_message"].startswith("Replace current city"), "compact preview "+tag)
                       assert saved()["active"] == before, "compact preview mutated save"
+                      # Container layout can settle after the text-change frame.
+                      # Require the original fully-visible/non-overlap conditions,
+                      # not just the successful preview response.
+                      wait(lambda: (v if (v := view()) and v["backup_help_bounds_ok"] and v["backup_message_bounds_ok"] else None), "compact wrapped backup layout "+tag)
                       backup_rects = compact_geometry(["backup_heading","help","input","message","export","preview","restore","close"], ["export","preview","restore","close"])
                       capture("compact-"+tag+"-preview")
                       compact_click("restore")

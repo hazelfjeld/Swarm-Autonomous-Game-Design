@@ -149,6 +149,12 @@ func _valid_previous(reply: Dictionary, committed: Dictionary) -> bool:
 	return int(previous.storage_revision) == generation - 1 and int(previous.wall_marker_ms) <= int(committed.wall_marker_ms) and int(previous.model.revision) <= int(committed.model.revision)
 
 func _stage(candidate: Dictionary, wall_marker_ms: int, result: Dictionary) -> bool:
+	# Refuse before staging or rotating any durable bytes. Keep enough space
+	# for future revision/marker digits in both recovery and portable formats.
+	if not _fits_capacity(candidate):
+		_fail()
+		_last_result = {"ok": false, "message": "Save unavailable. City backup capacity reached; previous saved data preserved. Use the offline rescue export."}
+		return false
 	var generation: int = int(_boundary.committed().storage_revision)
 	var pending: Dictionary = _boundary.begin(candidate, generation, wall_marker_ms)
 	if not pending.ok:
@@ -205,7 +211,23 @@ func stage_tick(elapsed_ms: int, observed_wall_ms: int) -> bool:
 ## Export a confirmed profile, never a pending or uncertain transaction.
 const BACKUP_FORMAT := "little-ray-city-backup"
 const BACKUP_VERSION := 1
-const MAX_BACKUP_BYTES := 1048576
+# Provisional local candidate limit, not measured browser/device capacity.
+# Existing valid 1–4 MiB profiles remain readable without receipt eviction.
+# Any future capacity increase must include a matching write admission check.
+const MAX_BACKUP_BYTES := 4194304
+
+static func _fits_capacity(model: Dictionary) -> bool:
+	# Check the canonical UTF-8 representations with worst-case counter
+	# widths, including headroom for recovery's revision increment.
+	var widest := model.duplicate()
+	widest.revision = Commit.MAX_INTEGER
+	var portable := JSON.stringify({"format": BACKUP_FORMAT, "version": BACKUP_VERSION,
+		"wall_marker_ms": Commit.MAX_INTEGER, "model": widest}, "", true, true)
+	if portable.to_utf8_buffer().size() > MAX_BACKUP_BYTES:
+		return false
+	var envelope := JSON.stringify({"storage_revision": Commit.MAX_INTEGER,
+		"wall_marker_ms": Commit.MAX_INTEGER, "model": widest}, "", true, true)
+	return envelope.to_utf8_buffer().size() <= MAX_BACKUP_BYTES
 
 func export_backup() -> String:
 	if _status != "ready":
@@ -330,8 +352,9 @@ func stage_recovery(confirmation: String, observed_wall_ms: int) -> bool:
 	expected.storage_revision = int(expected.storage_revision) + 1
 	expected.wall_marker_ms = maxi(int(expected.wall_marker_ms), observed_wall_ms)
 	expected.model.revision = int(expected.model.revision) + 1
-	if not _valid_city(expected.model):
+	if not _valid_city(expected.model) or not _fits_capacity(expected.model):
 		_fail()
+		_last_result = {"ok": false, "message": "Recovery unavailable. City invalid or exceeds backup capacity; original records preserved."}
 		return false
 	_recovery_expected = expected
 	_status = "recovering"

@@ -33,6 +33,15 @@ export function createProfileTransport(db) {
       p.wall_marker_ms <= a.wall_marker_ms &&
       p.model.revision <= a.model.revision;
   }
+  // This is only envelope eligibility. The Godot caller must independently
+  // validate the city schema before offering or confirming the selection.
+  function recoverablePair(p) {
+    const before = envelope(p.previous);
+    return p.previousPresent && !!before &&
+      (p.activePresent ? typeof p.active === "string" && !envelope(p.active) : p.active === undefined) &&
+      before.storage_revision < Number.MAX_SAFE_INTEGER &&
+      before.model.revision < Number.MAX_SAFE_INTEGER - 1;
+  }
   // Resolve only on the transaction's complete event; requests succeeding
   // individually are not durability acknowledgements.
   function readPair(includeArchive = false) {
@@ -63,16 +72,20 @@ export function createProfileTransport(db) {
     if (unavailable || busy) return {ok: false, status: "unavailable"};
     busy = true;
     try {
-      const pair = await readPair();
-      if (!pair.activePresent && !pair.previousPresent)
+      const {archive, archivePresent, ...pair} = await readPair(true);
+      if (!pair.activePresent && !pair.previousPresent) {
+        if (archivePresent) return failure("Recovery archive exists without an active profile; preserve it.");
         return {ok: true, status: "missing", active: null, previous: null};
+      }
       if ((pair.activePresent && pair.active === undefined) ||
           (pair.previousPresent && pair.previous === undefined) ||
           !validPair(pair.active, pair.previous)) {
         // Only a definitive integrity failure (not ambiguous I/O) permits a
         // separate, explicitly confirmed recovery operation on this instance.
-        recoveryPair = {...pair};
-        return {...failure("Invalid or orphaned profile; preserve both records."), ...pair};
+        const recoveryAvailable = !archivePresent && recoverablePair(pair);
+        recoveryPair = recoveryAvailable ? {...pair} : null;
+        return {...failure("Invalid or orphaned profile; preserve both records."), ...pair,
+          recovery_available: recoveryAvailable};
       }
       return {ok: true, status: "ready", active: pair.active, previous: pair.previous ?? null};
     } catch (_) { return failure("Could not read profile."); }
@@ -100,16 +113,18 @@ export function createProfileTransport(db) {
         const previous = store.get("previous");
         const activeKey = store.getKey("active");
         const previousKey = store.getKey("previous");
+        const archiveKey = store.getKey(recoveryKey);
         tx.oncomplete = () => resolve(applied);
         tx.onabort = () => reject(new Error("write aborted"));
         tx.onerror = () => reject(new Error("write failed"));
         // Values and key presence are read in the same transaction. The last
         // request callback compares and enqueues both writes before auto-commit.
-        previousKey.onsuccess = () => {
+        archiveKey.onsuccess = () => {
           const actual = active.result;
           const activePresent = activeKey.result !== undefined;
           const previousPresent = previousKey.result !== undefined;
-          if (expected === null ? activePresent || previousPresent : !activePresent || actual !== expected) return;
+          if (expected === null ? activePresent || previousPresent || archiveKey.result !== undefined :
+              !activePresent || actual !== expected) return;
           // When a session supplied the validated predecessor, compare its exact bytes too.
           // null represents verified absence; undefined is the low-level legacy API.
           if (expectedPrevious !== undefined && (previousPresent !== (expectedPrevious !== null) ||
@@ -133,7 +148,7 @@ export function createProfileTransport(db) {
     } catch (_) { return failure("Write outcome unknown; reload to reconcile."); }
     finally { busy = false; }
   }
-  // Narrow recovery primitive; NOT exposed to the live Godot mailbox yet.
+  // Narrow recovery primitive, gated by the writer session and mailbox.
   // Caller must hold the exclusive writer lock, validate the selected previous
   // snapshot against the domain schema, preview the lost progress, and obtain
   // explicit confirmation. Only missing or malformed-string active is handled;
@@ -146,12 +161,9 @@ export function createProfileTransport(db) {
       x.previousPresent === y.previousPresent &&
       x.active === y.active && x.previous === y.previous;
     const before = envelope(p.previous);
-    if (!samePair(p, expectedPair) || !p.previousPresent ||
-        validatedPrevious !== p.previous || !before ||
-        (p.activePresent ? typeof p.active !== "string" || !!envelope(p.active) : p.active !== undefined) ||
-        !Number.isSafeInteger(observedWallMs) || observedWallMs < 0 ||
-        before.storage_revision >= Number.MAX_SAFE_INTEGER ||
-        before.model.revision >= Number.MAX_SAFE_INTEGER - 1)
+    if (!samePair(p, expectedPair) || !recoverablePair(p) ||
+        validatedPrevious !== p.previous ||
+        !Number.isSafeInteger(observedWallMs) || observedWallMs < 0)
       return {ok: false, status: "unavailable", reason: "Recovery selection invalid or unsupported."};
     const payload = JSON.stringify({
       storage_revision: before.storage_revision + 1,
@@ -264,10 +276,29 @@ export async function openProfileSession(name, {
         return result;
       } catch (_) { return fail("Write outcome unknown; reload to reconcile."); }
     },
+    // The selected bytes must be validated and explicitly confirmed by the
+    // domain/UI caller. The raw damaged pair stays private to this transport.
+    async recoverPrevious(validatedPrevious, observedWallMs) {
+      if (state !== "recovery-required" || !initial?.recovery_available ||
+          validatedPrevious !== initial.previous ||
+          !Number.isSafeInteger(observedWallMs) || observedWallMs < 0)
+        return {ok: false, status: state};
+      state = "recovering";
+      try {
+        const result = await deadline(transport.recoverPrevious(initial, validatedPrevious, observedWallMs));
+        if (state !== "recovering") return unavailable("Session invalidated; reload to reconcile.");
+        if (!result.ok || typeof result.observed_text !== "string" ||
+            !Number.isSafeInteger(result.storage_revision))
+          return fail(result.reason || "Recovery could not be confirmed; reload to reconcile.");
+        state = "recovered";
+        return result;
+      } catch (_) { return fail("Recovery outcome unknown; reload to reconcile."); }
+    },
     async close() {
       if (state === "closed") return true;
-      // Do not release a writer while an operation may still commit.
-      if (state !== "ready" && state !== "read-only") return false;
+      // A confirmed recovery can close, but it cannot resume this old session.
+      // Never release an owner while an operation may still commit.
+      if (state !== "ready" && state !== "read-only" && state !== "recovered") return false;
       state = "closed";
       if (db) db.close();
       releaseLock();
@@ -307,6 +338,8 @@ export async function openProfileSession(name, {
             expected = result.active;
             expectedPrevious = result.previous;
             state = "ready";
+          } else if (result.recovery_available === true) {
+            state = "recovery-required";
           } else fail(result.reason || "Profile read failed.");
         } catch (_) { fail("Profile database unavailable."); }
         finally { ready(); }
@@ -344,6 +377,14 @@ export function createGodotProfilePort(openSession) {
       Promise.resolve().then(openSession).then(opened => {
         session = opened;
         const initial = session?.initial;
+        if (session?.status === "recovery-required" && initial?.recovery_available === true &&
+            typeof initial.previous === "string") {
+          // Do not forward malformed active bytes or the archive into Godot.
+          // ok:false keeps old clients fail-closed until the UI is wired.
+          finish({kind: "open", ok: false, status: "recovery-required",
+                  previous: initial.previous}, "recovery-required");
+          return;
+        }
         if (session?.status !== "ready" || !initial?.ok ||
             !((initial.status === "missing" && initial.active === null) ||
               (initial.status === "ready" && typeof initial.active === "string"))) {
@@ -370,6 +411,24 @@ export function createGodotProfilePort(openSession) {
       }).catch(() => fail("write"));
       return true;
     },
+    // Submit only after consuming the preview and obtaining domain validation
+    // plus explicit user confirmation. Never accept ordinary writes here.
+    begin_recovery(validatedPrevious, observedWallMs) {
+      if (state !== "recovery-required" || session?.status !== "recovery-required" ||
+          typeof validatedPrevious !== "string" || validatedPrevious !== session.initial?.previous ||
+          !Number.isSafeInteger(observedWallMs) || observedWallMs < 0) return false;
+      state = "recovering";
+      Promise.resolve().then(() => session.recoverPrevious(validatedPrevious, observedWallMs)).then(result => {
+        if (!result?.ok || result.status !== "recovered" || typeof result.observed_text !== "string" ||
+            !Number.isSafeInteger(result.storage_revision)) {
+          fail("recovery");
+          return;
+        }
+        finish({kind: "recovery", ok: true, status: "recovered",
+                storage_revision: result.storage_revision, observed_text: result.observed_text}, "recovered");
+      }).catch(() => fail("recovery"));
+      return true;
+    },
     take_result() {
       if (state !== "result") return "";
       const value = message;
@@ -377,10 +436,10 @@ export function createGodotProfilePort(openSession) {
       state = nextState;
       return value;
     },
-    // Only healthy, consumed states may release a writer. Faulted sessions
-    // intentionally retain their fence until the page is reloaded.
+    // Only healthy or definitively recovered, consumed states may release a
+    // writer. Faulted/pending sessions retain their fence until reload.
     async close() {
-      if (state !== "ready" || !session) return false;
+      if ((state !== "ready" && state !== "recovered") || !session) return false;
       state = "closing";
       try {
         if (!(await session.close())) {

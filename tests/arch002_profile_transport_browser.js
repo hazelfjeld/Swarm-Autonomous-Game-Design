@@ -293,6 +293,79 @@ const done = arguments[arguments.length - 1];
     await pairMailbox.close();
     indexedDB.deleteDatabase(mailboxName);
 
+    // Exercise the complete JS recovery seam, through a consumed preview
+    // and explicit confirmation, on a separate disposable real database.
+    const recoveryName = name + "-recovery-mailbox";
+    const seeded = createPort(() => openSession(recoveryName));
+    seeded.begin_open(); await awaitMessage(seeded);
+    seeded.begin_write(a); await awaitMessage(seeded);
+    seeded.begin_write(b); await awaitMessage(seeded);
+    check(await seeded.close(), "recovery mailbox fixture seeded and released");
+    const recoveryDb = await new Promise((resolve, reject) => {
+      const request = indexedDB.open(recoveryName, 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = reject;
+    });
+    const mutateRecovery = action => new Promise((resolve, reject) => {
+      const tx = recoveryDb.transaction("profiles", "readwrite");
+      action(tx.objectStore("profiles"));
+      tx.oncomplete = resolve;
+      tx.onabort = tx.onerror = reject;
+    });
+    const getRecoveryArchive = () => new Promise((resolve, reject) => {
+      const tx = recoveryDb.transaction("profiles", "readonly");
+      const q = tx.objectStore("profiles").get("recovery-original");
+      tx.oncomplete = () => resolve(q.result);
+      tx.onabort = tx.onerror = reject;
+    });
+    await mutateRecovery(s => s.put("unreadable", "active"));
+    const recovering = createPort(() => openSession(recoveryName));
+    check(recovering.begin_open() && !recovering.begin_recovery(a, 200),
+      "recovery requires consumed preview");
+    const selection = await awaitMessage(recovering);
+    check(selection.ok === false && selection.status === "recovery-required" &&
+      selection.previous === a && !("active" in selection), "recovery exposes predecessor only");
+    check(!recovering.begin_write(b) && !recovering.begin_recovery(b, 200) &&
+      !recovering.begin_recovery(a, -1), "recovery refuses normal writes and wrong selection");
+    const recoveryFollower = await openSession(recoveryName);
+    check(recoveryFollower.status === "read-only", "recovery retains exclusive writer");
+    await recoveryFollower.close();
+    check(recovering.begin_recovery(a, 200), "explicit recovery queued");
+    check(!recovering.begin_recovery(a, 200) && !recovering.begin_write(b) &&
+      !(await recovering.close()), "pending recovery cannot overlap or release writer");
+    const ack = await awaitMessage(recovering);
+    check(ack.ok && ack.kind === "recovery" && ack.status === "recovered" &&
+      ack.storage_revision === 2 && JSON.parse(ack.observed_text).model.food === 240 &&
+      JSON.parse(ack.observed_text).model.revision === 2 &&
+      JSON.parse(ack.observed_text).wall_marker_ms === 200, "recovery acknowledges restored bytes without offline credit");
+    check(!recovering.begin_write(b) && !recovering.begin_recovery(a, 200),
+      "confirmed recovery cannot reuse old mailbox");
+    const archived = await getRecoveryArchive();
+    check(JSON.parse(archived).active === "unreadable" && JSON.parse(archived).previous === a,
+      "mailbox recovery retains exact original archive");
+    check(await recovering.close(), "confirmed recovery releases writer for fresh open");
+    const afterRecovery = createPort(() => openSession(recoveryName));
+    afterRecovery.begin_open();
+    const loadedRecovery = await awaitMessage(afterRecovery);
+    check(loadedRecovery.ok && loadedRecovery.active === ack.observed_text &&
+      loadedRecovery.previous === a, "fresh mailbox validates recovered pair");
+    afterRecovery.begin_write(payload(3, 230, 200));
+    check((await awaitMessage(afterRecovery)).ok && (await getRecoveryArchive()) === archived,
+      "fresh ordinary save leaves archive unchanged");
+    await afterRecovery.close();
+    await mutateRecovery(s => s.put("second damage", "active"));
+    const secondRecovery = createPort(() => openSession(recoveryName));
+    secondRecovery.begin_open();
+    const denied = await awaitMessage(secondRecovery);
+    check(denied.status === "unavailable" && !("previous" in denied) &&
+      !secondRecovery.begin_recovery(a, 300), "existing archive prevents another recovery offer");
+    await mutateRecovery(s => {s.delete("active"); s.delete("previous");});
+    check(!(await create(recoveryDb).read()).ok &&
+      !(await create(recoveryDb).commit(null, a)).ok &&
+      (await getRecoveryArchive()) === archived, "archive-only database cannot initialize blank");
+    recoveryDb.close();
+    // Faulted secondRecovery intentionally holds its writer until page teardown.
+
     return {profile_transport: "pass", checks, actual_site_verified: false};
   } finally {
     other.close();

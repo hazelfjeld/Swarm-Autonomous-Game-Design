@@ -8,6 +8,8 @@ export function createProfileTransport(db) {
   const storeName = "profiles";
   let busy = false;
   let unavailable = false;
+  let recoveryPair = null;
+  const recoveryKey = "recovery-original";
   function envelope(text) {
     if (typeof text !== "string") return null;
     try {
@@ -33,7 +35,7 @@ export function createProfileTransport(db) {
   }
   // Resolve only on the transaction's complete event; requests succeeding
   // individually are not durability acknowledgements.
-  function readPair() {
+  function readPair(includeArchive = false) {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(storeName, "readonly");
       const store = tx.objectStore(storeName);
@@ -41,10 +43,13 @@ export function createProfileTransport(db) {
       const previous = store.get("previous");
       const activeKey = store.getKey("active");
       const previousKey = store.getKey("previous");
+      const archive = includeArchive ? store.get(recoveryKey) : null;
+      const archiveKey = includeArchive ? store.getKey(recoveryKey) : null;
       tx.oncomplete = () => resolve({
         active: active.result, previous: previous.result,
         activePresent: activeKey.result !== undefined,
-        previousPresent: previousKey.result !== undefined
+        previousPresent: previousKey.result !== undefined,
+        ...(includeArchive ? {archive: archive.result, archivePresent: archiveKey.result !== undefined} : {})
       });
       tx.onabort = () => reject(new Error("read aborted"));
       tx.onerror = () => reject(new Error("read failed"));
@@ -63,8 +68,12 @@ export function createProfileTransport(db) {
         return {ok: true, status: "missing", active: null, previous: null};
       if ((pair.activePresent && pair.active === undefined) ||
           (pair.previousPresent && pair.previous === undefined) ||
-          !validPair(pair.active, pair.previous))
+          !validPair(pair.active, pair.previous)) {
+        // Only a definitive integrity failure (not ambiguous I/O) permits a
+        // separate, explicitly confirmed recovery operation on this instance.
+        recoveryPair = {...pair};
         return {...failure("Invalid or orphaned profile; preserve both records."), ...pair};
+      }
       return {ok: true, status: "ready", active: pair.active, previous: pair.previous ?? null};
     } catch (_) { return failure("Could not read profile."); }
     finally { busy = false; }
@@ -124,7 +133,73 @@ export function createProfileTransport(db) {
     } catch (_) { return failure("Write outcome unknown; reload to reconcile."); }
     finally { busy = false; }
   }
-  return {read, commit};
+  // Narrow recovery primitive; NOT exposed to the live Godot mailbox yet.
+  // Caller must hold the exclusive writer lock, validate the selected previous
+  // snapshot against the domain schema, preview the lost progress, and obtain
+  // explicit confirmation. Only missing or malformed-string active is handled;
+  // envelope-valid but unsupported domain data and non-string records remain
+  // fenced. One immutable raw archive is retained; no automatic eviction.
+  async function recoverPrevious(expectedPair, validatedPrevious, observedWallMs) {
+    if (busy || !unavailable || !recoveryPair || !expectedPair) return {ok: false, status: "unavailable"};
+    const p = recoveryPair;
+    const samePair = (x, y) => x.activePresent === y.activePresent &&
+      x.previousPresent === y.previousPresent &&
+      x.active === y.active && x.previous === y.previous;
+    const before = envelope(p.previous);
+    if (!samePair(p, expectedPair) || !p.previousPresent ||
+        validatedPrevious !== p.previous || !before ||
+        (p.activePresent ? typeof p.active !== "string" || !!envelope(p.active) : p.active !== undefined) ||
+        !Number.isSafeInteger(observedWallMs) || observedWallMs < 0 ||
+        before.storage_revision >= Number.MAX_SAFE_INTEGER ||
+        before.model.revision >= Number.MAX_SAFE_INTEGER - 1)
+      return {ok: false, status: "unavailable", reason: "Recovery selection invalid or unsupported."};
+    const payload = JSON.stringify({
+      storage_revision: before.storage_revision + 1,
+      wall_marker_ms: Math.max(before.wall_marker_ms, observedWallMs),
+      model: {...before.model, revision: before.model.revision + 1}
+    });
+    const archive = JSON.stringify({
+      version: 1, activePresent: p.activePresent, previousPresent: p.previousPresent,
+      active: p.activePresent ? p.active : null, previous: p.previous
+    });
+    busy = true;
+    recoveryPair = null; // One attempt; reload/re-preview even on CAS conflict.
+    try {
+      const applied = await new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, "readwrite");
+        const store = tx.objectStore(storeName);
+        const active = store.get("active"), previous = store.get("previous");
+        const activeKey = store.getKey("active"), previousKey = store.getKey("previous");
+        const archiveKey = store.getKey(recoveryKey);
+        let changed = false;
+        tx.oncomplete = () => resolve(changed);
+        tx.onabort = () => reject(new Error("recovery aborted"));
+        tx.onerror = () => reject(new Error("recovery failed"));
+        archiveKey.onsuccess = () => {
+          const actual = {active: active.result, previous: previous.result,
+            activePresent: activeKey.result !== undefined, previousPresent: previousKey.result !== undefined};
+          if (archiveKey.result !== undefined || !samePair(p, actual)) return;
+          try {
+            store.add(archive, recoveryKey);
+            store.put(p.previous, "previous");
+            store.put(payload, "active");
+            changed = true;
+          } catch (_) { tx.abort(); }
+        };
+      });
+      if (!applied) return failure("Recovery conflict or archive already exists; preserve all records.");
+      const observed = await readPair(true);
+      if (!observed.activePresent || !observed.previousPresent || !observed.archivePresent ||
+          observed.active !== payload || observed.previous !== p.previous || observed.archive !== archive)
+        return failure("Recovery outcome unknown; reload to reconcile.");
+      // Keep this transport fenced. Only a fresh, domain-validated session may
+      // publish the recovered city or resume ordinary saves.
+      return {ok: true, status: "recovered", observed_text: observed.active,
+        storage_revision: before.storage_revision + 1};
+    } catch (_) { return failure("Recovery outcome unknown; reload to reconcile."); }
+    finally { busy = false; }
+  }
+  return {read, commit, recoverPrevious};
 }
 
 // Lifetime browser owner for one profile DB. The game must still validate the

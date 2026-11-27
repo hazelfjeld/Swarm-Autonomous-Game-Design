@@ -170,6 +170,47 @@ const done = arguments[arguments.length - 1];
       pair = await invalid.read();
       check(!pair.ok && pair.active === "damaged" && pair.previous === b, "corrupt active preserved for recovery");
       check(!(await invalid.commit(null, a)).ok, "corrupt profile cannot initialize blank");
+
+      // Recovery is an explicit separate operation with exact raw-pair CAS.
+      const staleRecovery = create(reopened);
+      const stalePair = await staleRecovery.read();
+      await injectPair("changed damage", b);
+      check(!(await staleRecovery.recoverPrevious(stalePair, b, 200)).ok,
+        "recovery stale raw active refused");
+      let raw = await rawPair();
+      check(raw[0] === "changed damage" && raw[1] === b, "recovery conflict preserves raw pair");
+      const recovery = create(reopened);
+      const preview = await recovery.read();
+      check(!(await recovery.recoverPrevious(preview, a, 200)).ok,
+        "recovery rejects unvalidated selection bytes");
+      const recovered = await recovery.recoverPrevious(preview, b, 200);
+      check(recovered.ok && recovered.status === "recovered" &&
+        JSON.parse(recovered.observed_text).model.food === 230 &&
+        JSON.parse(recovered.observed_text).model.revision === 3 &&
+        JSON.parse(recovered.observed_text).wall_marker_ms === 200,
+        "recovery restores previous without offline credit");
+      const readArchive = () => new Promise((resolve, reject) => {
+        const tx = reopened.transaction("profiles", "readonly");
+        const request = tx.objectStore("profiles").get("recovery-original");
+        tx.oncomplete = () => resolve(request.result);
+        tx.onabort = tx.onerror = reject;
+      });
+      const archive = await readArchive();
+      check(JSON.parse(archive).active === "changed damage" &&
+        JSON.parse(archive).previous === b && JSON.parse(archive).activePresent,
+        "recovery preserves original bytes in immutable archive");
+      const fresh = create(reopened);
+      const restoredPair = await fresh.read();
+      check(restoredPair.ok && restoredPair.active === recovered.observed_text && restoredPair.previous === b,
+        "recovery pair is valid on fresh read");
+      check((await fresh.commit(restoredPair.active, payload(4, 220, 200), b)).ok &&
+        (await readArchive()) === archive, "ordinary save leaves recovery archive untouched");
+      await injectPair("second damage", b);
+      const repeat = create(reopened);
+      const repeatPair = await repeat.read();
+      check(!(await repeat.recoverPrevious(repeatPair, b, 300)).ok &&
+        (await readArchive()) === archive && (await rawPair())[0] === "second damage",
+        "second recovery cannot overwrite original archive");
     } finally { reopened.close(); }
 
     // Exercise the actual session wrapper with native Web Locks and IndexedDB.

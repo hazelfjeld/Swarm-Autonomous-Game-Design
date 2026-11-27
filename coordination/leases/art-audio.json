@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "art-audio",
-  "run_id": null,
-  "generation": 91,
-  "acquired_at": null,
-  "expires_at": null
+  "run_id": "art-audio-20261127T1431Z-g92-b674e3",
+  "generation": 92,
+  "acquired_at": "2026-11-27T14:32:06.766Z",
+  "expires_at": "2026-11-27T15:02:06.766Z"
 }

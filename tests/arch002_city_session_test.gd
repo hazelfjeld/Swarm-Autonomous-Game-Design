@@ -49,6 +49,8 @@ func _initialize() -> void:
 	_run_recovery_choice()
 	_check(checks == 131, "all native session scenarios reached")
 	print(JSON.stringify({"city_profile_session": "pass" if failures.is_empty() else "fail", "checks": checks, "failures": failures}))
+	if failures.is_empty():
+		_run_large_save_probe()
 	quit(0 if failures.is_empty() else 1)
 
 func _run() -> void:
@@ -365,3 +367,83 @@ func _run_recovery_choice() -> void:
 	refused.poll(marker)
 	var refused_preview: Dictionary = refused.preview_recovery()
 	_check(not refused.stage_recovery(str(refused_preview.get("confirmation","")), marker) and refused.status() == "unavailable", "queue refusal fences session")
+
+# Long-play capacity probe: real City operations generate real receipts. No
+# artificial ledger fields, no live profile, no browser/IDB claims. Separate
+# from the original 132 checks so a capacity failure cannot be mistaken for
+# the previously passing small-save suite. Counts are synthetic stress inputs,
+# not an estimate of normal player behavior.
+func _run_large_save_probe() -> void:
+	var marker := 1700000000000
+	var city = City.new()
+	var lower: Dictionary = {}
+	for i in range(1, 13001):
+		var argument := "ray-1,1" if i % 2 == 1 else "ray-1,0"
+		var result: Dictionary = city.command("set_favorite", argument, "ui-" + str(i), city.revision)
+		if not result.ok:
+			_check(false, "large save: real favorite command refused at " + str(i))
+			return
+		if i == 12000:
+			lower = city.snapshot()
+	var upper: Dictionary = city.snapshot()
+	var valid: bool = City.validate_snapshot(lower) and City.validate_snapshot(upper) and lower.receipts.size() == 12000 and upper.receipts.size() == 13000
+	_check(valid, "large save: both real command snapshots validate")
+	if not valid:
+		return
+	var duplicate_result: Dictionary = city.command("set_favorite", "ray-1,1", "ui-1", 0)
+	_check(duplicate_result.ok and city.snapshot() == upper, "large save: old operation remains idempotent")
+	var lower_portable := JSON.stringify({"format": Session.BACKUP_FORMAT, "version": Session.BACKUP_VERSION, "wall_marker_ms": marker, "model": lower}, "", true, true)
+	var upper_portable := JSON.stringify({"format": Session.BACKUP_FORMAT, "version": Session.BACKUP_VERSION, "wall_marker_ms": marker, "model": upper}, "", true, true)
+	var lower_envelope := JSON.stringify({"storage_revision": 1, "wall_marker_ms": marker, "model": lower}, "", true, true)
+	var upper_envelope := JSON.stringify({"storage_revision": 2, "wall_marker_ms": marker, "model": upper}, "", true, true)
+	var lower_bytes := lower_portable.to_utf8_buffer().size()
+	var upper_bytes := upper_portable.to_utf8_buffer().size()
+	var lower_raw_bytes := lower_envelope.to_utf8_buffer().size()
+	var upper_raw_bytes := upper_envelope.to_utf8_buffer().size()
+	var straddles: bool = lower_bytes <= 1048576 and lower_raw_bytes <= 1048576 and upper_bytes > 1048576 and upper_raw_bytes > 1048576
+	_check(straddles, "large save: actual Godot serialization straddles original 1 MiB boundary")
+	if not straddles:
+		print(JSON.stringify({"large_save_probe": "fixture-boundary-changed", "lower_portable_bytes": lower_bytes, "upper_portable_bytes": upper_bytes, "lower_envelope_bytes": lower_raw_bytes, "upper_envelope_bytes": upper_raw_bytes}))
+		return
+	var small_port := FakePort.new()
+	var small_session = Session.new()
+	small_session.start(small_port)
+	small_port.deliver({"kind":"open","ok":true,"status":"ready","active":lower_envelope,"previous":null})
+	var small_staged: bool = small_session.poll(marker)
+	if small_staged:
+		small_port.ack()
+		small_session.poll(marker)
+	var small_backup: String = small_session.export_backup()
+	var small_recovery_port := FakePort.new()
+	var small_recovery = Session.new()
+	small_recovery.start(small_recovery_port)
+	small_recovery_port.deliver({"kind":"open","ok":false,"status":"recovery-required","previous":lower_envelope})
+	var small_offered: bool = small_recovery.poll(marker) and small_recovery.preview_recovery().get("ok", false)
+	var small_ok: bool = small_session.status() == "ready" and not small_backup.is_empty() and small_session.preview_backup(small_backup).get("ok", false) and small_offered
+	_check(small_ok, "large save: below-boundary backup and recovery control")
+	if not small_ok:
+		return
+
+	# Open the actual oversized domain state with its valid predecessor.
+	# FakePort supplies the same mailbox protocol, not actual durable storage.
+	var large_port := FakePort.new()
+	var large_session = Session.new()
+	large_session.start(large_port)
+	large_port.deliver({"kind":"open","ok":true,"status":"ready","active":upper_envelope,"previous":lower_envelope})
+	var large_staged: bool = large_session.poll(marker)
+	if large_staged:
+		large_port.ack()
+		large_session.poll(marker)
+	var large_ready: bool = large_session.status() == "ready" and large_session.snapshot() == upper
+	var large_backup: String = large_session.export_backup()
+	var large_backup_ok: bool = not large_backup.is_empty() and large_session.preview_backup(large_backup).get("ok", false)
+	var large_recovery_port := FakePort.new()
+	var large_recovery = Session.new()
+	large_recovery.start(large_recovery_port)
+	large_recovery_port.deliver({"kind":"open","ok":false,"status":"recovery-required","previous":upper_envelope})
+	var large_offered: bool = large_recovery.poll(marker) and large_recovery.preview_recovery().get("ok", false)
+	print(JSON.stringify({"large_save_probe": "observed", "lower_receipts": lower.receipts.size(), "upper_receipts": upper.receipts.size(), "lower_portable_bytes": lower_bytes, "upper_portable_bytes": upper_bytes, "lower_envelope_bytes": lower_raw_bytes, "upper_envelope_bytes": upper_raw_bytes, "small_control_passed": small_ok, "oversized_checkpoint_staged": large_staged, "oversized_checkpoint_confirmed_in_mock": large_ready, "portable_backup_and_preview": large_backup_ok, "previous_recovery_offered": large_offered, "recovery_status": large_recovery.status(), "recovery_writes": large_recovery_port.writes}))
+	_check(large_ready, "large save: valid existing oversized profile must remain available")
+	_check(large_backup_ok, "large save: confirmed profile must have a valid portable backup")
+	_check(large_offered, "large save: valid oversized previous copy must offer explicit recovery")
+	print(JSON.stringify({"large_save_contract": "pass" if failures.is_empty() else "fail", "checks": checks, "failures": failures}))

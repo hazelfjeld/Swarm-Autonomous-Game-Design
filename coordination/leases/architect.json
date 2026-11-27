@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": "architect-20261127T061400001Z-g84-ci-diagnostic",
+  "run_id": null,
   "generation": 84,
-  "acquired_at": "2026-11-27T06:14:00.001Z",
-  "expires_at": "2026-11-27T06:44:00.001Z"
+  "acquired_at": null,
+  "expires_at": null
 }

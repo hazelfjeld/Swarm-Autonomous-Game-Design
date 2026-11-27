@@ -802,8 +802,31 @@ jobs:
                   # Separate database; the diagnostic scene and its save stay untouched.
                   transport_source = pathlib.Path("spikes/web_delivery/profile_transport.js").read_text()
                   transport_fixture = pathlib.Path("tests/arch002_profile_transport_browser.js").read_text()
-                  transport_result = api("POST", session + "/execute/async", {
-                      "args": [transport_source], "script": transport_fixture})
+                  # The expanded fixture has its own bounded script budget.
+                  # Keep the HTTP deadline (35s) and exact assertion count.
+                  api("POST", session + "/timeouts", {"script": 25000, "pageLoad": 30000})
+                  transport_started = time.monotonic()
+                  try:
+                      transport_result = api("POST", session + "/execute/async", {
+                          "args": [transport_source], "script": transport_fixture})
+                  except urllib.error.HTTPError as error:
+                      failure = {"profile_transport": "webdriver-error",
+                          "elapsed_seconds": round(time.monotonic() - transport_started, 3),
+                          "http_status": error.code,
+                          "response": error.read().decode("utf-8", errors="replace")[:4096],
+                          "actual_site_verified": False}
+                      observation = evidence / "profile-transport-observation.json"
+                      observation.write_text(json.dumps(failure, indent=2))
+                      # Best-effort diagnostic only; a hung renderer may not respond.
+                      try:
+                          failure["fixture_progress"] = script("return globalThis.__arch002TransportProgress || null")
+                      except Exception as progress_error:
+                          failure["progress_error"] = str(progress_error)
+                      observation.write_text(json.dumps(failure, indent=2))
+                      print(json.dumps(failure), flush=True)
+                      raise
+                  print("Transport elapsed seconds:",
+                      round(time.monotonic() - transport_started, 3), flush=True)
                   (evidence / "profile-transport-observation.json").write_text(json.dumps(transport_result, indent=2))
                   print(json.dumps(transport_result), flush=True)
                   assert transport_result.get("profile_transport") == "pass", transport_result

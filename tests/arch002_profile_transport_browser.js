@@ -1,6 +1,8 @@
 // Executed by WebDriver on the ephemeral CI origin, not the intended Site.
 // The first argument is the exact checked-out production candidate module.
 const done = arguments[arguments.length - 1];
+// Disposable test progress only: no profile contents are recorded.
+globalThis.__arch002TransportProgress = {passed: 0, last_passed: null};
 (async () => {
   const {create, openSession, createPort} = new Function(arguments[0].replace(/export (async )?function/g, "$1function") + "\nreturn {create: createProfileTransport, openSession: openProfileSession, createPort: createGodotProfilePort};")();
   const name = "arch002-profile-transport-fixture-" + crypto.randomUUID();
@@ -15,8 +17,9 @@ const done = arguments[arguments.length - 1];
   const other = await open();
   const checks = [];
   const check = (condition, label) => {
-    if (!condition) throw new Error(label);
+    if (!condition) throw new Error("After " + checks.length + " passed: " + label);
     checks.push(label);
+    globalThis.__arch002TransportProgress = {passed: checks.length, last_passed: label};
   };
   const payload = (n, food, time = 100) => JSON.stringify({
     storage_revision: n, wall_marker_ms: time, model: {revision: n, food}

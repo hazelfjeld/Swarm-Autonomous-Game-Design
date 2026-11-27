@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": null,
-  "generation": 89,
-  "acquired_at": null,
-  "expires_at": null
+  "run_id": "architect-20261127T1211Z-g90-gatecheck",
+  "generation": 90,
+  "acquired_at": "2026-11-27T12:11:26Z",
+  "expires_at": "2026-11-27T12:41:26Z"
 }

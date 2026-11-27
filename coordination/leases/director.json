@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 132,
-  "run_id": "director-mountain-mover-20261127T1251Z-reflow-verification",
-  "acquired_at": "2026-11-27T12:52:50.950Z",
-  "expires_at": "2026-11-27T13:22:50.950Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "gameplay",
-  "run_id": "gameplay-20261127T122340Z-coordinate-reflow-g86",
+  "run_id": null,
   "generation": 86,
-  "acquired_at": "2026-11-27T12:23:43.772Z",
-  "expires_at": "2026-11-27T12:53:43.772Z"
+  "acquired_at": null,
+  "expires_at": null
 }

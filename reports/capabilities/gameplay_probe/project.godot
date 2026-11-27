@@ -1,8 +1,0 @@
-; Standalone GAMEPLAY-001 environment probe, not the Little Ray runtime.
-config_version=5
-
-[application]
-config/name="Gameplay Capability Probe"
-
-[rendering]
-renderer/rendering_method="gl_compatibility"

@@ -14,6 +14,8 @@ var _visible: Dictionary = {}
 var _last_result: Dictionary = {}
 var _pending_result: Dictionary = {}
 var _pending_generation := 0
+var _recovery_text: String = ""
+var _recovery_expected: Dictionary = {}
 
 func _valid_city(raw: Dictionary) -> bool:
 	return City.validate_snapshot(raw)
@@ -54,6 +56,8 @@ func _fail() -> void:
 	if _status == "saving":
 		_boundary.mark_unknown(_pending_generation)
 	_pending_result = {}
+	_recovery_text = ""
+	_recovery_expected = {}
 	_last_result = {"ok": false, "message": "Save unavailable. Reload to reconcile."}
 	_status = "unavailable"
 
@@ -61,7 +65,7 @@ func _fail() -> void:
 ## current wall time, not a duration. A new or resumed city is staged before
 ## publishing any playable state, including its offline settlement.
 func poll(observed_wall_ms: int) -> bool:
-	if _status != "opening" and _status != "saving":
+	if _status not in ["opening", "saving", "recovering"]:
 		return false
 	var encoded: Variant = _port.take_result()
 	if not encoded is String:
@@ -77,9 +81,13 @@ func poll(observed_wall_ms: int) -> bool:
 		_status = "read-only"
 		_last_result = {"ok": false, "message": "Another tab owns this city. Close it and reload."}
 		return true
+	if _status == "opening" and reply.get("kind") == "open" and reply.get("status") == "recovery-required" and reply.get("ok") == false:
+		return _offer_recovery(reply.get("previous"))
 	if reply.get("ok") != true:
 		_fail()
 		return false
+	if _status == "recovering":
+		return _confirm_recovery(reply)
 	if _status == "opening":
 		if reply.get("kind") != "open" or not _valid_time(observed_wall_ms):
 			_fail()
@@ -274,3 +282,84 @@ func stage_restore(encoded: String, confirmation: String, observed_wall_ms: int)
 	# A portable backup carries a domain timeline, not another device's wall-clock high-water mark.
 	var marker: int = maxi(int(committed.wall_marker_ms), observed_wall_ms)
 	return _stage(candidate, marker, {"ok": true, "message": "Backup restored."})
+
+## A recoverable transport envelope is not sufficient: independently validate
+## the exact predecessor against the city schema before offering any choice.
+## No city is published or initialized; unknown active progress stays archived.
+func _offer_recovery(raw: Variant) -> bool:
+	if not raw is String or raw.to_utf8_buffer().size() > MAX_BACKUP_BYTES:
+		_fail()
+		return false
+	var prior = Commit.new(_valid_city)
+	if not prior.initialize_from_text(raw):
+		_fail()
+		return false
+	var selected: Dictionary = prior.committed()
+	if int(selected.storage_revision) < 1 or int(selected.storage_revision) >= Commit.MAX_INTEGER or int(selected.model.revision) >= Commit.MAX_INTEGER - 1:
+		_fail()
+		return false
+	_recovery_text = raw
+	_status = "recovery-required"
+	_last_result = {"ok": false, "message": "Save damaged. Previous city available for explicit recovery."}
+	return true
+
+func preview_recovery() -> Dictionary:
+	if _status != "recovery-required" or _recovery_text.is_empty():
+		return {"ok": false}
+	var prior = Commit.new(_valid_city)
+	if not prior.initialize_from_text(_recovery_text):
+		return {"ok": false}
+	var selected: Dictionary = prior.committed()
+	var model: Dictionary = selected.model
+	return {"ok": true, "gold": model.gold, "food": model.food, "xp": model.xp,
+		"individual_count": model.individuals.size(), "domain_revision": model.revision,
+		"storage_revision": selected.storage_revision, "confirmation": _recovery_text.sha256_text()}
+
+## True means queued. Confirmation binds the exact preview to the current
+## session; the JS writer independently compares the original raw pair.
+func stage_recovery(confirmation: String, observed_wall_ms: int) -> bool:
+	if _status != "recovery-required" or not _valid_time(observed_wall_ms):
+		return false
+	if confirmation.is_empty() or confirmation != _recovery_text.sha256_text():
+		return false
+	var prior = Commit.new(_valid_city)
+	if not prior.initialize_from_text(_recovery_text):
+		_fail()
+		return false
+	var expected: Dictionary = prior.committed()
+	expected.storage_revision = int(expected.storage_revision) + 1
+	expected.wall_marker_ms = maxi(int(expected.wall_marker_ms), observed_wall_ms)
+	expected.model.revision = int(expected.model.revision) + 1
+	if not _valid_city(expected.model):
+		_fail()
+		return false
+	_recovery_expected = expected
+	_status = "recovering"
+	_last_result = {"ok": false, "message": "Recovering; wait for storage confirmation."}
+	if _port.begin_recovery(_recovery_text, observed_wall_ms) != true:
+		_fail()
+		return false
+	return true
+
+## The acknowledged bytes must match the selected predecessor with only the
+## documented generation/revision/marker changes. Never resume this session.
+func _confirm_recovery(reply: Dictionary) -> bool:
+	if reply.get("kind") != "recovery" or reply.get("status") != "recovered" or not Commit._whole(reply.get("storage_revision")) or int(reply.storage_revision) != int(_recovery_expected.storage_revision) or not reply.get("observed_text") is String:
+		_fail()
+		return false
+	var verified = Commit.new(_valid_city)
+	if not verified.initialize_from_text(reply.observed_text):
+		_fail()
+		return false
+	var observed: Dictionary = verified.committed()
+	# Normalize JSON numeric representations through the same encoding/parser
+	# rather than relying on int/float identity after the JS round trip.
+	var expected: Variant = JSON.parse_string(JSON.stringify(_recovery_expected, "", true, true))
+	if observed != expected:
+		_fail()
+		return false
+	_recovery_text = ""
+	_recovery_expected = {}
+	_status = "recovered"
+	_last_result = {"ok": true, "message": "Previous city recovered. Reload to open it."}
+	return true

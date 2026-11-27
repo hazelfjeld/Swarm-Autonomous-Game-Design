@@ -914,6 +914,11 @@ jobs:
           var backup_close: Button
           var backup_confirmation: String = ""
           var restore_pending: bool = false
+          var recovery_panel: ColorRect
+          var recovery_message: Label
+          var recovery_confirm: Button
+          var recovery_reload: Button
+          var recovery_confirmation: String = ""
 
           func _ready() -> void:
               session = Session.new()
@@ -924,6 +929,7 @@ jobs:
                   return
               add_child(city)
               setup_backup_ui()
+              setup_recovery_ui()
               # Read-only CI diagnostics, opt-in on the isolated export.
               # No command injection, clock acceleration or persistence override.
               if OS.has_feature("web") and JavaScriptBridge.eval("new URLSearchParams(location.search).get('arch002_test') === '1'"):
@@ -1101,6 +1107,81 @@ jobs:
               else:
                   backup_message.text = "Save unavailable. Close and reload to reconcile; replacement outcome is not confirmed."
 
+          # Recovery is separate from portable import: never show a blank city
+          # or resume the old writer after the transport replaces the raw pair.
+          func setup_recovery_ui() -> void:
+              var layer := CanvasLayer.new()
+              layer.layer = 2
+              add_child(layer)
+              recovery_panel = ColorRect.new()
+              recovery_panel.color = Color("#183d4b")
+              recovery_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+              layer.add_child(recovery_panel)
+              recovery_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+              var heading := Label.new()
+              heading.text = "Recover your saved city"
+              heading.position = Vector2(100, 100)
+              heading.add_theme_font_size_override("font_size", 34)
+              recovery_panel.add_child(heading)
+              recovery_message = Label.new()
+              recovery_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+              recovery_message.position = Vector2(100, 205)
+              recovery_message.size = Vector2(900, 360)
+              recovery_message.add_theme_font_size_override("font_size", 24)
+              recovery_panel.add_child(recovery_message)
+              recovery_confirm = Button.new()
+              recovery_confirm.text = "Restore previous city"
+              recovery_confirm.position = Vector2(100, 650)
+              recovery_confirm.size = Vector2(400, 70)
+              recovery_confirm.add_theme_font_size_override("font_size", 21)
+              recovery_confirm.pressed.connect(confirm_recovery)
+              recovery_panel.add_child(recovery_confirm)
+              recovery_reload = Button.new()
+              recovery_reload.text = "Reload page"
+              recovery_reload.position = Vector2(600, 650)
+              recovery_reload.size = Vector2(400, 70)
+              recovery_reload.add_theme_font_size_override("font_size", 21)
+              recovery_reload.pressed.connect(reload_recovery)
+              recovery_panel.add_child(recovery_reload)
+              recovery_panel.hide()
+
+          func confirm_recovery() -> void:
+              if recovery_confirmation.is_empty():
+                  return
+              var token: String = recovery_confirmation
+              recovery_confirmation = ""
+              recovery_confirm.disabled = true
+              session.stage_recovery(token, int(Time.get_unix_time_from_system() * 1000.0))
+              process_recovery()
+
+          func reload_recovery() -> void:
+              if session.status() != "recovering" and OS.has_feature("web"):
+                  JavaScriptBridge.eval("location.reload()")
+
+          func process_recovery() -> void:
+              var phase: String = session.status()
+              if phase == "recovery-required":
+                  if not recovery_panel.visible:
+                      var preview: Dictionary = session.preview_recovery()
+                      if not preview.get("ok", false):
+                          return
+                      recovery_confirmation = str(preview.confirmation)
+                      recovery_message.text = "The latest save is damaged. A validated earlier city is available.\\n\\n%d Gold · %d Food · %d XP · %d rays\\nSaved revision %d\\n\\nRestoring may lose newer progress. The original damaged records will be archived. No changes occur until you confirm." % [preview.gold, preview.food, preview.xp, preview.individual_count, preview.domain_revision]
+                      recovery_panel.show()
+                      recovery_reload.grab_focus()
+                  recovery_confirm.disabled = recovery_confirmation.is_empty()
+                  recovery_reload.disabled = false
+              elif phase == "recovering":
+                  recovery_panel.show()
+                  recovery_confirm.disabled = true
+                  recovery_reload.disabled = true
+                  recovery_message.text = "Recovering previous city… wait for storage confirmation."
+                  session.poll(int(Time.get_unix_time_from_system() * 1000.0))
+              elif recovery_panel.visible:
+                  recovery_confirm.disabled = true
+                  recovery_reload.disabled = false
+                  recovery_message.text = "Previous city recovered. Reload to open it." if phase == "recovered" else "Recovery was not confirmed. Reload to reconcile; do not assume the save changed."
+
           func mark_down(kind: String) -> void:
               downs[kind] += 1
 
@@ -1110,6 +1191,8 @@ jobs:
           func _process(_delta: float) -> void:
               if backup_panel != null:
                   process_backup()
+              if recovery_panel != null:
+                  process_recovery()
               if diagnostic_window == null:
                   return
               diagnostic_window.arch002CityState = JSON.stringify({
@@ -1120,6 +1203,8 @@ jobs:
                   "domain_revision": city.city.revision, "pending_kind": city.profile_pending_kind,
                   "status": city.status_label.text, "footer": city.profile_footer.text,
                   "backup_open": backup_panel.visible, "backup_message": backup_message.text,
+                  "recovery_open": recovery_panel.visible, "recovery_message": recovery_message.text,
+                  "recovery_confirm_disabled": recovery_confirm.disabled,
                   "backup_restore_disabled": backup_restore.disabled,
                   "backup_help_bounds_ok": backup_panel.get_global_rect().encloses(backup_help.get_global_rect()) and backup_help.get_global_rect().end.y <= backup_text.get_global_rect().position.y,
                   "backup_message_bounds_ok": backup_panel.get_global_rect().encloses(backup_message.get_global_rect()) and backup_message.get_global_rect().end.y <= backup_restore.get_global_rect().position.y,
@@ -1245,7 +1330,7 @@ jobs:
                     return await new Promise((ok, bad) => {
                       const t = db.transaction("profiles", corrupt || replacement ? "readwrite" : "readonly");
                       const store = t.objectStore("profiles");
-                      const a = store.get("active"), p = store.get("previous");
+                      const a = store.get("active"), p = store.get("previous"), archive = store.get("recovery-original");
                       const badText = '{"fault":';
                       let original;
                       p.onsuccess = () => {
@@ -1258,7 +1343,7 @@ jobs:
                           store.put(replacement.previous, "previous");
                         } else if (corrupt) store.put(badText, "active");
                       };
-                      t.oncomplete = () => ok({original, observed: replacement || {
+                      t.oncomplete = () => ok({original, archive: archive.result ?? null, observed: replacement || {
                         active: corrupt ? badText : original.active, previous: original.previous}});
                       t.onabort = () => bad(t.error || new Error("Missing recovery pair"));
                       t.onerror = () => bad(t.error);
@@ -1431,26 +1516,29 @@ jobs:
                   def blocked_city():
                       v = view()
                       return v if v and v["phase"] == "unavailable" and v["overlay"] and not v["confirmed"] else None
-                  blocked = wait(blocked_city, "corrupt city visibly unavailable")
-                  assert "Save unavailable" in blocked["footer"], blocked
-                  assert blocked["disabled"]["backup"]
+                  def recoverable_city():
+                      v = view()
+                      return v if v and v["phase"] == "recovery-required" and v["overlay"] and not v["confirmed"] and v["recovery_open"] else None
+                  blocked = wait(recoverable_city, "corrupt city offers explicit previous-save recovery")
+                  assert "Restoring may lose newer progress" in blocked["recovery_message"], blocked
+                  assert blocked["disabled"]["backup"] and not blocked["recovery_confirm_disabled"]
                   capture("11-corrupt-city-blocked")
                   modal_click(830, 363)
                   time.sleep(2)
-                  assert blocked_city(), "Corrupt city unexpectedly playable"
+                  assert recoverable_city(), "Corrupt city unexpectedly playable"
                   assert raw_city_pair()["observed"] == corrupt_pair, "Blocked city overwrote recovery bytes"
                   api("POST", session + "/refresh", {})
                   wait(bounds, "corrupt city reload")
-                  blocked_reload = wait(blocked_city, "corrupt reload remains unavailable")
-                  assert "Save unavailable" in blocked_reload["footer"], blocked_reload
+                  blocked_reload = wait(recoverable_city, "corrupt reload still requires confirmation")
+                  assert not blocked_reload["recovery_confirm_disabled"], blocked_reload
                   assert raw_city_pair()["observed"] == corrupt_pair, "Reload overwrote recovery bytes"
                   capture("12-corrupt-city-reload-blocked")
                   recovery_observation = {"active_preserved":True,"previous_preserved":True,
                       "blocked":blocked,"blocked_reload":blocked_reload,
                       "previous_storage_revision":json.loads(corrupt_pair["previous"])["storage_revision"],
-                      "recovery_choice_implemented":False}
+                      "recovery_choice_implemented":True,"confirmed":False}
                   (evidence/"corrupt-city-observation.json").write_text(json.dumps(recovery_observation, indent=2))
-                  print(json.dumps({"corrupt_city_fail_closed":"pass","recovery_choice_implemented":False}), flush=True)
+                  print(json.dumps({"corrupt_city_fail_closed":"pass","recovery_choice_implemented":True}), flush=True)
                   # Envelope-valid future-schema predecessor, with a valid active city.
                   # A startup autosave must not silently rotate away unknown data.
                   api("POST", session + "/url", {"url":inert_url})
@@ -1474,9 +1562,48 @@ jobs:
                   assert raw_city_pair()["observed"] == future_pair, "Unsupported previous lost on reload"
                   capture("13-future-previous-preserved")
                   (evidence/"future-previous-observation.json").write_text(json.dumps({"active_preserved":True,"previous_preserved":True,"blocked":future_blocked}, indent=2))
+                  # Restore the disposable corrupted pair again and explicitly
+                  # confirm through the real Godot button; do not inject a command.
+                  api("POST", session + "/url", {"url":inert_url})
+                  assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                  raw_city_pair(replacement=corrupt_pair)
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "recovery confirmation loader")
+                  wait(recoverable_city, "recovery preview before confirmation")
+                  assert raw_city_pair()["observed"] == corrupt_pair
+                  capture("14-recovery-preview")
+                  modal_click(300, 685)
+                  def recovered_city():
+                      v = view()
+                      return v if v and v["phase"] == "recovered" and v["recovery_open"] and not v["confirmed"] and v["recovery_confirm_disabled"] else None
+                  recovered = wait(recovered_city, "explicit recovery acknowledged")
+                  assert "Reload to open it" in recovered["recovery_message"]
+                  restored_pair = raw_city_pair()
+                  selected = json.loads(corrupt_pair["previous"])
+                  restored_active = json.loads(restored_pair["observed"]["active"])
+                  expected_model = dict(selected["model"])
+                  expected_model["revision"] += 1
+                  assert restored_active["model"] == expected_model
+                  assert restored_active["storage_revision"] == selected["storage_revision"] + 1
+                  assert restored_active["wall_marker_ms"] >= selected["wall_marker_ms"]
+                  assert restored_pair["observed"]["previous"] == corrupt_pair["previous"]
+                  archive = json.loads(restored_pair["archive"])
+                  assert archive == {"version":1,"activePresent":True,"previousPresent":True,**corrupt_pair}
+                  capture("15-recovery-confirmed")
+                  time.sleep(2)
+                  assert raw_city_pair()["observed"] == restored_pair["observed"]
+                  modal_click(800, 685)
+                  wait(bounds, "fresh session after recovery reload")
+                  wait(lambda: (v if (v := view()) and v["phase"] == "ready" and v["confirmed"] and not v["recovery_open"] else None), "recovered city reopened")
+                  reopened_recovery = saved()
+                  for key in ("gold", "food", "individuals", "receipts"):
+                      assert reopened_recovery["active"]["model"][key] == expected_model[key], key
+                  assert raw_city_pair()["archive"] == restored_pair["archive"]
+                  capture("16-recovery-reloaded")
+                  (evidence/"recovery-confirmed-observation.json").write_text(json.dumps({"status":"pass","recovered":recovered,"archive_preserved":True,"reopened":True}, indent=2))
                   report = {"persistent_city":"pass","browser":opened["capabilities"].get("browserVersion"),
                       "manifest":json.loads((root/"integration-manifest.json").read_text()),
-                      "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload","paid crop matures and harvests once","harvest persists after reload","portable city export and preview","explicit restore with previous-good","reload and command after restore","malformed active save fails closed and preserves previous-good","unsupported previous schema fails closed and preserves both copies"],
+                      "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload","paid crop matures and harvests once","harvest persists after reload","portable city export and preview","explicit restore with previous-good","reload and command after restore","malformed active save fails closed and preserves previous-good","unsupported previous schema fails closed and preserves both copies","explicit corrupted-save recovery preserves archive and reopens selected city"],
                       "fresh":fresh,"planted":planted,"fed":fed,"collected":collected,"restored":restored,"after":after,
                       "before_harvest":before_harvest,"harvested":harvested,"harvest_reloaded":final,
                       "backup_exported":exported,"backup_before_restore":before_restore,"backup_replacement":replacement,

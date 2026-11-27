@@ -11,6 +11,15 @@ class FakePort:
 	var payload := ""
 	var writes := 0
 	var allow_write := true
+	var recoveries := 0
+	var recovery_payload := ""
+	var recovery_wall := 0
+	var allow_recovery := true
+	func begin_recovery(value: String, wall: int) -> bool:
+		recoveries += 1
+		recovery_payload = value
+		recovery_wall = wall
+		return allow_recovery
 	func begin_open() -> bool:
 		return true
 	func begin_write(value: String) -> bool:
@@ -37,7 +46,8 @@ func _initialize() -> void:
 	_run_import_clock()
 	_run_previous_validation()
 	_run_distinct_revision_rollback()
-	_check(checks == 112, "all native session scenarios reached")
+	_run_recovery_choice()
+	_check(checks == 129, "all native session scenarios reached")
 	print(JSON.stringify({"city_profile_session": "pass" if failures.is_empty() else "fail", "checks": checks, "failures": failures}))
 	quit(0 if failures.is_empty() else 1)
 
@@ -286,3 +296,59 @@ func _run_distinct_revision_rollback() -> void:
 	_check(reopened.stage_command("feed", "ray-1", "ui-3", int(expected.revision), 0, marker), "rollback: replay of newly committed operation evaluated")
 	next_port.ack()
 	_check(reopened.poll(marker) and reopened.last_result().ok and reopened.snapshot() == final_state, "rollback: newly committed operation is idempotent")
+
+func _run_recovery_choice() -> void:
+	var marker := 1700000000000
+	var seed: Dictionary = City.new().snapshot()
+	var prior := JSON.stringify({"storage_revision": 2, "wall_marker_ms": marker, "model": seed})
+	var port := FakePort.new()
+	var session = Session.new()
+	_check(session.start(port), "recovery opens writer")
+	port.deliver({"kind":"open","ok":false,"status":"recovery-required","previous":prior})
+	_check(session.poll(marker) and session.status() == "recovery-required", "validated previous offered")
+	var preview: Dictionary = session.preview_recovery()
+	_check(preview.get("ok", false) and preview.get("gold") == seed.gold and preview.get("food") == seed.food and preview.get("domain_revision") == seed.revision, "recovery preview matches selected city")
+	_check(session.snapshot().is_empty() and port.writes == 0 and port.recoveries == 0, "preview does not publish or write")
+	_check(not session.stage_tick(1, marker) and not session.stage_command("feed","ray-1","ui-1",0,0,marker), "ordinary writes fenced")
+	_check(not session.stage_recovery("wrong", marker) and port.recoveries == 0, "incorrect confirmation refused")
+	_check(session.stage_recovery(str(preview.get("confirmation", "")), marker + 1000), "explicit recovery queued")
+	_check(session.status() == "recovering" and port.recovery_payload == prior and port.recovery_wall == marker + 1000, "exact predecessor bytes and sampled wall sent")
+	_check(not session.stage_recovery(str(preview.get("confirmation", "")), marker) and port.recoveries == 1 and session.snapshot().is_empty(), "pending recovery cannot repeat or publish")
+	var model: Dictionary = seed.duplicate(true)
+	model.revision = int(model.revision) + 1
+	var observed := JSON.stringify({"storage_revision": 3, "wall_marker_ms": marker + 1000, "model": model})
+	port.deliver({"kind":"recovery","ok":true,"status":"recovered","storage_revision":3,"observed_text":observed})
+	_check(session.poll(marker + 1000) and session.status() == "recovered" and session.last_result().ok, "exact recovery acknowledged")
+	_check(session.snapshot().is_empty() and not session.stage_tick(1, marker) and session.export_backup().is_empty(), "recovered session requires reload")
+	var reopen_port := FakePort.new()
+	var reopened = Session.new()
+	_check(reopened.start(reopen_port), "fresh recovery reload opens")
+	reopen_port.deliver({"kind":"open","ok":true,"status":"ready","active":observed,"previous":prior})
+	_check(reopened.poll(marker + 1000) and reopened.status() == "saving", "recovered pair validates for startup")
+	reopen_port.ack()
+	_check(reopened.poll(marker + 1000) and reopened.snapshot() == model, "reopen confirms selected city with rebased revision")
+	var future: Dictionary = seed.duplicate(true)
+	future.checkpoint_schema = 3
+	var invalid := JSON.stringify({"storage_revision":2,"wall_marker_ms":marker,"model":future})
+	var invalid_port := FakePort.new()
+	var invalid_session = Session.new()
+	invalid_session.start(invalid_port)
+	invalid_port.deliver({"kind":"open","ok":false,"status":"recovery-required","previous":invalid})
+	_check(not invalid_session.poll(marker) and invalid_session.status() == "unavailable" and invalid_port.recoveries == 0 and not invalid_session.preview_recovery().ok, "future domain predecessor never offered")
+	var bad_port := FakePort.new()
+	var bad_session = Session.new()
+	bad_session.start(bad_port)
+	bad_port.deliver({"kind":"open","ok":false,"status":"recovery-required","previous":prior})
+	bad_session.poll(marker)
+	var bad_preview: Dictionary = bad_session.preview_recovery()
+	bad_session.stage_recovery(str(bad_preview.get("confirmation","")), marker + 1000)
+	bad_port.deliver({"kind":"recovery","ok":true,"status":"recovered","storage_revision":3,"observed_text":JSON.stringify({"storage_revision":3,"wall_marker_ms":marker + 1001,"model":model})})
+	_check(not bad_session.poll(marker) and bad_session.status() == "unavailable" and bad_session.snapshot().is_empty(), "unexpected readback fails closed")
+	var refused_port := FakePort.new()
+	refused_port.allow_recovery = false
+	var refused = Session.new()
+	refused.start(refused_port)
+	refused_port.deliver({"kind":"open","ok":false,"status":"recovery-required","previous":prior})
+	refused.poll(marker)
+	var refused_preview: Dictionary = refused.preview_recovery()
+	_check(not refused.stage_recovery(str(refused_preview.get("confirmation","")), marker) and refused.status() == "unavailable", "queue refusal fences session")

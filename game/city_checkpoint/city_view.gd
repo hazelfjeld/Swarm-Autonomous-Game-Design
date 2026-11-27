@@ -87,6 +87,8 @@ var compact_page: int = 0
 var compact_nav: Array[Button] = []
 var desktop_controls: Dictionary = {}
 var compact_map_transform := Transform2D.IDENTITY
+var compact_status: RichTextLabel
+var compact_save: RichTextLabel
 
 func label_at(value: String, position_: Vector2, size_: Vector2, font_size: int = 20) -> Label:
 	var item := Label.new()
@@ -250,8 +252,35 @@ func setup_city_layout() -> void:
 		tab.add_theme_font_size_override("font_size", 12)
 		tab.hide()
 		compact_nav.append(tab)
+	compact_status = make_compact_message(14)
+	compact_save = make_compact_message(13)
 	resized.connect(apply_city_layout)
 	apply_city_layout()
+
+# Preserve the canonical status/save labels for desktop and integration callers.
+# Compact copies wrap and scroll instead of discarding the tail of a message.
+func make_compact_message(font_size: int) -> RichTextLabel:
+	var item := RichTextLabel.new()
+	item.bbcode_enabled = false
+	item.fit_content = false
+	item.scroll_active = true
+	item.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	item.focus_mode = Control.FOCUS_ALL
+	item.add_theme_font_size_override("normal_font_size", font_size)
+	add_child(item)
+	item.hide()
+	return item
+
+func sync_compact_messages() -> void:
+	if not compact_mode or compact_status == null:
+		return
+	# Do not reset a player's scroll position on an unchanged frame.
+	if compact_status.text != status_label.text:
+		compact_status.text = status_label.text
+		compact_status.scroll_to_line(0)
+	if compact_save.text != profile_footer.text:
+		compact_save.text = profile_footer.text
+		compact_save.scroll_to_line(0)
 
 func choose_compact_page(index: int) -> void:
 	if not compact_mode or index < 0 or index >= compact_nav.size():
@@ -300,6 +329,8 @@ func apply_city_layout() -> void:
 				control.visible = saved["visible"]
 			for tab in compact_nav:
 				tab.hide()
+			compact_status.hide()
+			compact_save.hide()
 			layout_placement_row()
 			queue_redraw()
 		return
@@ -317,10 +348,21 @@ func apply_city_layout() -> void:
 		tab.set_pressed_no_signal(i == compact_page)
 	var nav_bottom: float = 34.0 + ceili(float(compact_nav.size()) / nav_columns) * 48.0
 	compact_label(goal_label, 8, nav_bottom, w, 38, 14)
-	compact_label(status_label, 8, h - 72.0, w, 34, 14)
-	compact_label(profile_footer, 8, h - 36.0, w, 34, 13)
+	# Landscape keeps the previous 72-unit footprint; taller screens can
+	# dedicate additional space without taking a row from any action panel.
+	var message_band: float = 120.0 if h >= 600.0 else 72.0
+	var message_top: float = h - message_band
+	if h < 600.0 and w >= 580.0:
+		var message_width: float = floorf((w - 8.0) / 2.0)
+		compact_place(compact_status, 8, message_top, message_width, message_band - 4.0)
+		compact_place(compact_save, 16 + message_width, message_top, message_width, message_band - 4.0)
+	else:
+		var message_height: float = message_band / 2.0 - 2.0
+		compact_place(compact_status, 8, message_top, w, message_height)
+		compact_place(compact_save, 8, message_top + message_height + 4.0, w, message_height - 2.0)
+	sync_compact_messages()
 	var top: float = nav_bottom + 40.0
-	var bottom: float = h - 78.0
+	var bottom: float = message_top - 6.0
 	var columns: int = 2 if w >= 580.0 else 1
 	match compact_page:
 		0: # Map, sample and explicit placement preview.
@@ -807,6 +849,7 @@ func _process(_delta: float) -> void:
 	var now := Time.get_ticks_msec()
 	if profile_session != null:
 		process_profile(now, int(Time.get_unix_time_from_system() * 1000.0))
+		sync_compact_messages()
 		return
 	var previous_revision: int = city.revision
 	var previous_xp: int = city.xp
@@ -816,6 +859,7 @@ func _process(_delta: float) -> void:
 		adapter.capture(city.snapshot())
 		status_label.text = "Builder job complete · +%d account XP" % (city.xp - previous_xp)
 	refresh()
+	sync_compact_messages()
 
 # Reconstruct the high-water mark on restore. If a valid imported receipt is
 # at the serial ceiling, walk unused IDs instead of overflowing or reusing it.

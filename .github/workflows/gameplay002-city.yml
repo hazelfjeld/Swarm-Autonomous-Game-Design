@@ -125,8 +125,16 @@ jobs:
           \t\tvar transform: Transform2D = tab.get_viewport().get_screen_transform() * tab.get_global_transform_with_canvas()
           \t\tvar rect: Rect2 = transform * Rect2(Vector2.ZERO, tab.size)
           \t\tnav.append({"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y, "visible": tab.is_visible_in_tree()})
+          \tvar messages: Dictionary = {}
+          \tif compact_mode:
+          \t\tfor key in ["compact_status", "compact_save"]:
+          \t\t\tvar message: RichTextLabel = get(key)
+          \t\t\tvar transform: Transform2D = message.get_viewport().get_screen_transform() * message.get_global_transform_with_canvas()
+          \t\t\tvar rect: Rect2 = transform * Rect2(Vector2.ZERO, message.size)
+          \t\t\tvar original: Label = status_label if key == "compact_status" else profile_footer
+          \t\t\tmessages[key] = {"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y, "visible": message.is_visible_in_tree(), "text_matches": message.text == original.text, "content_height": message.get_content_height(), "local_height": message.size.y, "scroll_active": message.scroll_active}
           \tvar window_size := get_window().size
-          \tvar report := {"window": [window_size.x, window_size.y], "controls": rows, "gold": city.gold, "sample_disabled": sample_button.disabled, "compact": compact_mode, "page": compact_page, "nav": nav}
+          \tvar report := {"window": [window_size.x, window_size.y], "controls": rows, "gold": city.gold, "sample_disabled": sample_button.disabled, "compact": compact_mode, "page": compact_page, "nav": nav, "messages": messages}
           \tJavaScriptBridge.eval("window.cityCompactProbe = " + JSON.stringify(report))
           """
           p.write_text(s)
@@ -267,6 +275,17 @@ jobs:
                                   tags = failures(rect, current) + ([] if raw["visible"] else ["hidden"])
                                   case["navigation_failures"].extend(f"page {page} nav {i}: {tag}" for tag in tags)
                                   active[f"nav_{i}"] = rect
+                              messages = current["probe"]["messages"]
+                              assert set(messages) == {"compact_status", "compact_save"}
+                              for key, raw in messages.items():
+                                  rect = css_rect(raw, current)
+                                  tags = failures(rect, current) + ([] if raw["visible"] else ["hidden"])
+                                  case["navigation_failures"].extend(f"page {page} {key}: {tag}" for tag in tags)
+                                  if not raw["text_matches"] or not raw["scroll_active"]:
+                                      case["navigation_failures"].append(f"page {page} {key}: message lost or scrolling disabled")
+                                  if raw["content_height"] <= 0 or raw["content_height"] > raw["local_height"]:
+                                      case["navigation_failures"].append(f"page {page} {key}: initial message does not fully fit")
+                                  active[key] = rect
                           for key in expected:
                               raw = rows[key]
                               rect = css_rect(raw, current)
@@ -296,7 +315,12 @@ jobs:
                           b = sample["rect"]
                           click_rect(b)
                           try:
-                              wait(lambda: (v if (v := observe()) and v["probe"]["gold"] == 1210 and v["probe"]["sample_disabled"] else None), "one sample credit " + label, 5)
+                              after = wait(lambda: (v if (v := observe()) and v["probe"]["gold"] == 1210 and v["probe"]["sample_disabled"] else None), "one sample credit " + label, 5)
+                              if compact:
+                                  case["after_messages"] = after["probe"]["messages"]
+                                  for key, raw in case["after_messages"].items():
+                                      if not raw["text_matches"] or raw["content_height"] <= 0 or raw["content_height"] > raw["local_height"]:
+                                          case["navigation_failures"].append(f"after sample {key}: message lost or clipped")
                               case["sample_click"] = "passed"
                           except AssertionError:
                               case["sample_click"] = "failed"

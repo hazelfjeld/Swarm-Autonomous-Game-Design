@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "director",
-  "generation": 138,
-  "run_id": null,
-  "acquired_at": null,
-  "expires_at": null
+  "generation": 139,
+  "run_id": "director-20261127T160117Z-9d2a4b",
+  "acquired_at": "2026-11-27T16:01:48.937Z",
+  "expires_at": "2026-11-27T16:31:48.937Z"
 }

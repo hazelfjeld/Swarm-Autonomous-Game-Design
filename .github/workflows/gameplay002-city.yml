@@ -120,8 +120,13 @@ jobs:
           \t\tvar transform: Transform2D = control.get_viewport().get_screen_transform() * control.get_global_transform_with_canvas()
           \t\tvar rect: Rect2 = transform * Rect2(Vector2.ZERO, control.size)
           \t\trows[key] = {"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y, "visible": control.is_visible_in_tree()}
+          \tvar nav: Array = []
+          \tfor tab in compact_nav:
+          \t\tvar transform: Transform2D = tab.get_viewport().get_screen_transform() * tab.get_global_transform_with_canvas()
+          \t\tvar rect: Rect2 = transform * Rect2(Vector2.ZERO, tab.size)
+          \t\tnav.append({"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y, "visible": tab.is_visible_in_tree()})
           \tvar window_size := get_window().size
-          \tvar report := {"window": [window_size.x, window_size.y], "controls": rows, "gold": city.gold, "sample_disabled": sample_button.disabled}
+          \tvar report := {"window": [window_size.x, window_size.y], "controls": rows, "gold": city.gold, "sample_disabled": sample_button.disabled, "compact": compact_mode, "page": compact_page, "nav": nav}
           \tJavaScriptBridge.eval("window.cityCompactProbe = " + JSON.stringify(report))
           """
           p.write_text(s)
@@ -193,6 +198,26 @@ jobs:
                   or rect["y"] + rect["h"] > min(vh, c["bottom"]) + eps):
                   tags.append("clipped")
               return tags
+          # The compact view deliberately uses real navigation instead of fitting
+          # 26 controls on screen at once. Every original target is still
+          # measured at its reachable panel, plus the new navigation targets.
+          pages = [
+              ["sample_button", "map_mode_button", "cancel_preview_button"],
+              ["build_choice", "coordinate_x", "coordinate_y", "build_button", "cancel_build_button"],
+              ["ray_choice", "name_edit", "feed_button", "level_button"],
+              ["habitat_choice", "collect_button", "move_ray_button", "upgrade_button"],
+              ["farm_choice", "plant_short", "plant_long", "harvest_button"],
+              ["shop_choice", "buy_button", "place_egg_button"],
+              ["collection_button", "favorite_button", "sell_button"],
+          ]
+          def click_rect(b):
+              x, y = round(b["x"] + b["w"]/2), round(b["y"] + b["h"]/2)
+              api("POST", session + "/actions", {"actions":[{"type":"pointer","id":"mouse","parameters":{"pointerType":"mouse"},"actions":[
+                  {"type":"pointerMove","duration":50,"origin":"viewport","x":x,"y":y},
+                  {"type":"pointerDown","button":0},{"type":"pause","duration":80},{"type":"pointerUp","button":0}]}]})
+          def intersects(a, b):
+              return (min(a["x"]+a["w"], b["x"]+b["w"])-max(a["x"], b["x"]) > .05
+                      and min(a["y"]+a["h"], b["y"]+b["h"])-max(a["y"], b["y"]) > .05)
           # Pure conversion/classifier sanity checks; actual engine geometry follows.
           f = {"canvas":{"x":10,"y":20,"width":550,"height":440,"right":560,"bottom":460},
                "probe":{"window":[1100,880]}, "viewport":[600,500]}
@@ -223,18 +248,53 @@ jobs:
                       frame = wait(settled, "settled layout " + label)
                       assert len(frame["probe"]["controls"]) == 26
                       assert frame["probe"]["gold"] == 1200 and not frame["probe"]["sample_disabled"]
-                      case = {"viewport":label, "frame":frame, "controls":{}, "sample_click":"not_attempted"}
-                      for key, raw in frame["probe"]["controls"].items():
-                          rect = css_rect(raw, frame)
-                          case["controls"][key] = {"rect":rect,"failures":failures(rect, frame) + ([] if raw["visible"] else ["hidden"])}
+                      case = {"viewport":label, "frame":frame, "controls":{}, "sample_click":"not_attempted",
+                              "navigation_failures":[], "page_navigation":[], "overlaps":[]}
                       (evidence / (label + "-before.png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+                      compact = width < 1100 or height < 880
+                      assert frame["probe"]["compact"] == compact, "Wrong layout mode " + label
+                      expected_keys = set(frame["probe"]["controls"])
+                      assert len(expected_keys) == 26 and set(sum(pages, [])) == expected_keys and sum(map(len, pages)) == 26
+                      def measure_page(current, expected, page):
+                          active = {}
+                          rows = current["probe"]["controls"]
+                          if compact:
+                              unexpected = [key for key, raw in rows.items() if raw["visible"] and key not in expected]
+                              case["navigation_failures"].extend(f"page {page}: unexpected visible {key}" for key in unexpected)
+                              assert len(current["probe"]["nav"]) == len(pages)
+                              for i, raw in enumerate(current["probe"]["nav"]):
+                                  rect = css_rect(raw, current)
+                                  tags = failures(rect, current) + ([] if raw["visible"] else ["hidden"])
+                                  case["navigation_failures"].extend(f"page {page} nav {i}: {tag}" for tag in tags)
+                                  active[f"nav_{i}"] = rect
+                          for key in expected:
+                              raw = rows[key]
+                              rect = css_rect(raw, current)
+                              case["controls"][key] = {"rect":rect,"page":page,"failures":failures(rect, current) + ([] if raw["visible"] else ["hidden"])}
+                              active[key] = rect
+                          for i, (a, rect) in enumerate(active.items()):
+                              for b, other in list(active.items())[i+1:]:
+                                  if intersects(rect, other):
+                                      case["overlaps"].append(f"page {page}: {a}/{b}")
+                      if not compact:
+                          measure_page(frame, expected_keys, 0)
+                      else:
+                          assert frame["probe"]["page"] == 0
+                          for page, expected in enumerate(pages):
+                              if page:
+                                  nav = frame["probe"]["nav"][page]
+                                  click_rect(css_rect(nav, frame))
+                                  frame = wait(lambda: (v if (v := observe()) and v["probe"]["page"] == page else None), "navigation page " + str(page), 5)
+                              measure_page(frame, expected, page)
+                              case["page_navigation"].append(page)
+                              (evidence / (label + "-page-" + str(page) + ".png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+                          click_rect(css_rect(frame["probe"]["nav"][0], frame))
+                          frame = wait(lambda: (v if (v := observe()) and v["probe"]["page"] == 0 else None), "return to map", 5)
+                      assert set(case["controls"]) == expected_keys
                       sample = case["controls"]["sample_button"]
                       if "clipped" not in sample["failures"]:
                           b = sample["rect"]
-                          x, y = round(b["x"] + b["w"]/2), round(b["y"] + b["h"]/2)
-                          api("POST", session + "/actions", {"actions":[{"type":"pointer","id":"mouse","parameters":{"pointerType":"mouse"},"actions":[
-                              {"type":"pointerMove","duration":50,"origin":"viewport","x":x,"y":y},
-                              {"type":"pointerDown","button":0},{"type":"pause","duration":80},{"type":"pointerUp","button":0}]}]})
+                          click_rect(b)
                           try:
                               wait(lambda: (v if (v := observe()) and v["probe"]["gold"] == 1210 and v["probe"]["sample_disabled"] else None), "one sample credit " + label, 5)
                               case["sample_click"] = "passed"
@@ -245,7 +305,8 @@ jobs:
                       report["cases"].append(case)
                       retain()
                       print(json.dumps({"viewport":label,"failing_controls":case["failing_controls"],"sample_click":case["sample_click"]}), flush=True)
-                  report["pass"] = all(not c["failing_controls"] and c["sample_click"] == "passed" for c in report["cases"])
+                  report["pass"] = all(not c["failing_controls"] and not c["navigation_failures"] and not c["overlaps"]
+                                       and c["sample_click"] == "passed" for c in report["cases"])
                   retain()
                   # Preserve failures as evidence rather than silently claiming touch support.
                   assert report["pass"], "Served control target/access failure; inspect compact-layout.json"

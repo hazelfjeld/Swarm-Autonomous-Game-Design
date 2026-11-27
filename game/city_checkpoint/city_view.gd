@@ -80,6 +80,13 @@ var cancel_preview_button: Button
 var map_dragging: bool = false
 var preview_origin: Vector2i = Vector2i.ZERO
 var drag_origin: Vector2i = Vector2i.ZERO
+# Responsive presentation only: the same control instances and commands are
+# shared between the full desktop view and the compact destination panels.
+var compact_mode: bool = false
+var compact_page: int = 0
+var compact_nav: Array[Button] = []
+var desktop_controls: Dictionary = {}
+var compact_map_transform := Transform2D.IDENTITY
 
 func label_at(value: String, position_: Vector2, size_: Vector2, font_size: int = 20) -> Label:
 	var item := Label.new()
@@ -210,6 +217,7 @@ func _ready() -> void:
 	sale_dialog.confirmed.connect(confirm_sale)
 	add_child(sale_dialog)
 	refresh()
+	setup_city_layout()
 	if profile_session != null:
 		setup_profile_overlay()
 		update_profile_display()
@@ -219,6 +227,140 @@ func _ready() -> void:
 	if profile_session == null and args.size() == 2 and args[0] == "--capture-city":
 		capture_mode = true
 		call_deferred("capture_fixture", args[1])
+
+# Keep desktop geometry intact. At compact sizes use real viewport units,
+# persistent navigation, and separate panels rather than shrinking the HUD.
+func setup_city_layout() -> void:
+	for child in get_children():
+		if child is Control:
+			var control := child as Control
+			var saved: Dictionary = {"position": control.position, "size": control.size, "visible": control.visible}
+			if control is Label:
+				saved["wrap"] = control.autowrap_mode
+				saved["clip"] = control.clip_text
+				saved["font"] = control.get_theme_font_size("font_size")
+			elif control is Button:
+				saved["clip"] = control.clip_text
+			desktop_controls[control] = saved
+	var titles := ["Map", "Build", "Rays", "Home", "Farm", "Shop", "Book"]
+	for i in range(titles.size()):
+		var tab := button_at(titles[i], Vector2.ZERO, choose_compact_page.bind(i))
+		tab.clip_text = true
+		tab.toggle_mode = true
+		tab.add_theme_font_size_override("font_size", 12)
+		tab.hide()
+		compact_nav.append(tab)
+	resized.connect(apply_city_layout)
+	apply_city_layout()
+
+func choose_compact_page(index: int) -> void:
+	if not compact_mode or index < 0 or index >= compact_nav.size():
+		return
+	map_dragging = false
+	compact_page = index
+	apply_city_layout()
+
+func compact_place(control: Control, x: float, y: float, w: float, h: float) -> void:
+	if control is Button:
+		control.clip_text = true
+	control.position = Vector2(x, y)
+	control.size = Vector2(w, h)
+	control.show()
+
+func compact_label(control: Label, x: float, y: float, w: float, h: float, font: int = 15) -> void:
+	control.add_theme_font_size_override("font_size", font)
+	control.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	control.clip_text = true
+	compact_place(control, x, y, w, h)
+
+func compact_grid(controls: Array, x: float, y: float, w: float, columns: int) -> float:
+	var width_: float = floorf((w - 8.0 * (columns - 1)) / columns)
+	for i in range(controls.size()):
+		var control: Control = controls[i]
+		compact_place(control, x + (i % columns) * (width_ + 8.0), y + floori(float(i) / columns) * 56.0, width_, 48.0)
+	return y + ceili(float(controls.size()) / columns) * 56.0
+
+func apply_city_layout() -> void:
+	if desktop_controls.is_empty():
+		return
+	var needs_compact: bool = size.x < 1100.0 or size.y < 880.0
+	if not needs_compact:
+		if compact_mode:
+			compact_mode = false
+			for control in desktop_controls:
+				var saved: Dictionary = desktop_controls[control]
+				if control is Label:
+					control.autowrap_mode = saved["wrap"]
+					control.clip_text = saved["clip"]
+					control.add_theme_font_size_override("font_size", saved["font"])
+				elif control is Button:
+					control.clip_text = saved["clip"]
+				control.position = saved["position"]
+				control.size = saved["size"]
+				control.visible = saved["visible"]
+			for tab in compact_nav:
+				tab.hide()
+			layout_placement_row()
+			queue_redraw()
+		return
+	compact_mode = true
+	var w: float = maxf(320.0, size.x) - 16.0
+	var h: float = maxf(390.0, size.y)
+	for control in desktop_controls:
+		control.hide()
+	compact_label(wallet, 8, 4, w, 26, 16)
+	var nav_columns: int = mini(compact_nav.size(), maxi(1, floori((w + 4.0) / 48.0)))
+	var nav_width: float = floorf((w - (nav_columns - 1) * 4.0) / nav_columns)
+	for i in range(compact_nav.size()):
+		var tab: Button = compact_nav[i]
+		compact_place(tab, 8 + (i % nav_columns) * (nav_width + 4.0), 34 + floori(float(i) / nav_columns) * 48.0, nav_width, 44.0)
+		tab.set_pressed_no_signal(i == compact_page)
+	var nav_bottom: float = 34.0 + ceili(float(compact_nav.size()) / nav_columns) * 48.0
+	compact_label(goal_label, 8, nav_bottom, w, 38, 14)
+	compact_label(status_label, 8, h - 72.0, w, 34, 14)
+	compact_label(profile_footer, 8, h - 36.0, w, 34, 13)
+	var top: float = nav_bottom + 40.0
+	var bottom: float = h - 78.0
+	var columns: int = 2 if w >= 580.0 else 1
+	match compact_page:
+		0: # Map, sample and explicit placement preview.
+			var area: Rect2
+			if columns == 2:
+				var side: float = minf(300.0, floorf(w * 0.4))
+				var map_width: float = w - side - 8.0
+				compact_grid([sample_button, map_mode_button, cancel_preview_button], 8 + map_width + 8.0, top, side, 1)
+				compact_label(land_label, 8, top, map_width, 26)
+				area = Rect2(8, top + 28.0, map_width, maxf(1.0, bottom - top - 28.0))
+			else:
+				var next_y: float = compact_grid([sample_button], 8, top, w, 1)
+				next_y = compact_grid([map_mode_button, cancel_preview_button], 8, next_y, w, 2)
+				compact_label(land_label, 8, next_y, w, 26)
+				area = Rect2(8, next_y + 28.0, w, maxf(1.0, bottom - next_y - 28.0))
+			# Only the map projection scales. The controls remain in viewport units.
+			var source := Rect2(18, 198, 716, 367)
+			var ratio: float = minf(area.size.x / source.size.x, area.size.y / source.size.y)
+			var origin: Vector2 = area.position + (area.size - source.size * ratio) * 0.5 - source.position * ratio
+			compact_map_transform = Transform2D(Vector2(ratio, 0), Vector2(0, ratio), origin)
+		1: # Building/land operations retain explicit coordinates and confirmation.
+			compact_grid([build_choice, coordinate_x, coordinate_y, build_button, cancel_build_button], 8, top, w, columns)
+		2: # Individual details and training.
+			compact_label(ray_title, 8, top, w, 24, 18)
+			compact_label(ray_info, 8, top + 24.0, w, 42, 15)
+			compact_grid([ray_choice, name_edit, feed_button, level_button], 8, top + 70.0, w, columns)
+		3: # Housing actions use the same selected individual and habitat.
+			compact_label(ray_info, 8, top, w, 42, 15)
+			compact_grid([habitat_choice, collect_button, move_ray_button, upgrade_button], 8, top + 46.0, w, columns)
+		4:
+			compact_label(farm_info, 8, top, w, 30)
+			compact_grid([farm_choice, plant_short, plant_long, harvest_button], 8, top + 34.0, w, columns)
+		5:
+			compact_label(egg_info, 8, top, w, 46)
+			compact_grid([shop_choice, buy_button, place_egg_button], 8, top + 50.0, w, columns)
+		6:
+			compact_label(collection_info, 8, top, w, 34)
+			compact_label(sale_note, 8, top + 34.0, w, 36)
+			compact_grid([collection_button, favorite_button, sell_button], 8, top + 74.0, w, columns)
+	queue_redraw()
 
 func option_at(at: Vector2, dimensions: Vector2) -> OptionButton:
 	var control := OptionButton.new()
@@ -264,7 +406,8 @@ func collection_text() -> String:
 
 func open_collection() -> void:
 	collection_dialog.dialog_text = collection_text()
-	collection_dialog.popup_centered(Vector2i(760, 480))
+	collection_dialog.dialog_autowrap = compact_mode
+	collection_dialog.popup_centered(Vector2i(mini(760, maxi(200, int(size.x) - 24)), mini(480, maxi(160, int(size.y) - 24))) if compact_mode else Vector2i(760, 480))
 
 func preview_sale() -> void:
 	var error: String = city.sale_error(selected_ray)
@@ -274,7 +417,8 @@ func preview_sale() -> void:
 	sale_target = selected_ray
 	var ray: Dictionary = city.individuals[sale_target]
 	sale_dialog.dialog_text = "Sell %s (%s, %s, Lv %d) for %d Gold?\nThe individual and its training are lost permanently. Discovery remains." % [ray["nickname"], sale_target, city.ray_species(sale_target)["name"], ray["level"], city.sale_value(sale_target)]
-	sale_dialog.popup_centered(Vector2i(500, 180))
+	sale_dialog.dialog_autowrap = compact_mode
+	sale_dialog.popup_centered(Vector2i(mini(500, maxi(200, int(size.x) - 24)), 180) if compact_mode else Vector2i(500, 180))
 
 func confirm_sale() -> void:
 	if not sale_target.is_empty():
@@ -315,6 +459,8 @@ func refresh_roster() -> void:
 # Reserve actual theme minimum widths, then distribute the remaining desktop
 # row width. The spinner's arrows/LineEdit can exceed its requested width.
 func layout_placement_row() -> void:
+	if compact_mode:
+		return
 	var controls: Array[Control] = [build_choice, coordinate_x, coordinate_y, build_button, cancel_build_button]
 	var preferred: Array[float] = [185.0, 100.0, 100.0, 150.0, 135.0]
 	var widths: Array[float] = []
@@ -469,7 +615,7 @@ func preview_point(point: Vector2) -> bool:
 	if cell.x > coordinate_x.max_value or cell.y > coordinate_y.max_value:
 		return false
 	set_placement_coordinates(cell)
-	status_label.text = "Preview cell (%d,%d) · confirm or cancel below." % [cell.x, cell.y]
+	status_label.text = ("Preview cell (%d,%d) · confirm in Build tab." if compact_mode else "Preview cell (%d,%d) · confirm or cancel below.") % [cell.x, cell.y]
 	return true
 
 # Gold markers live in screen space, not inside the inverse-projected tile.
@@ -507,18 +653,25 @@ func _gui_input(event: InputEvent) -> void:
 	if profile_session != null and (profile_view_invalid or not profile_confirmed or profile_session.status() != "ready"):
 		accept_event()
 		return
+	if compact_mode and compact_page != 0:
+		return
+	if not (event is InputEventMouse):
+		return
+	var point: Vector2 = event.position
+	if compact_mode:
+		point = compact_map_transform.affine_inverse() * point
 	# In placement mode a drag only edits the preview. Release never commits.
 	# Child controls retain their own GUI events; touch uses mouse emulation.
 	if map_place_mode and event is InputEventMouseMotion:
 		if map_dragging and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
-			preview_point(event.position)
+			preview_point(point)
 			accept_event()
 		return
 	if not (event is InputEventMouseButton) or event.button_index != MOUSE_BUTTON_LEFT:
 		return
 	if map_place_mode:
 		if event.pressed:
-			if not map_point_is_usable(event.position):
+			if not map_point_is_usable(point):
 				return
 			accept_event()
 			if not previewable_selection():
@@ -526,24 +679,24 @@ func _gui_input(event: InputEvent) -> void:
 				return
 			drag_origin = placement_coordinates()
 			map_dragging = true
-			preview_point(event.position)
+			preview_point(point)
 		elif map_dragging:
 			map_dragging = false
 			accept_event()
-			if not preview_point(event.position):
+			if not preview_point(point):
 				set_placement_coordinates(drag_origin)
 				status_label.text = "Outside placement area · previous preview restored."
 		return
 	if event.pressed:
 		return
-	var marker_id := gold_marker_at(event.position)
+	var marker_id := gold_marker_at(point)
 	if not marker_id.is_empty():
 		accept_event()
 		tend_habitat(marker_id)
 		return
-	if not map_point_is_usable(event.position):
+	if not map_point_is_usable(point):
 		return
-	var cell := map_cell(event.position)
+	var cell := map_cell(point)
 	accept_event()
 	for b in city.buildings:
 		var footprint := Rect2i(int(b["x"]), int(b["y"]), int(b["size"]), int(b["size"]))
@@ -801,7 +954,7 @@ func next_city_goal() -> String:
 
 func refresh() -> void:
 	goal_label.text = "NEXT · " + next_city_goal()
-	wallet.text = "GOLD  %d     ·     FOOD  %d     ·     ACCOUNT LV %d  (%d XP)" % [city.gold, city.food, city.account_level(), city.xp]
+	wallet.text = ("Gold %d · Food %d · Lv %d (%d XP)" if compact_mode else "GOLD  %d     ·     FOOD  %d     ·     ACCOUNT LV %d  (%d XP)") % [city.gold, city.food, city.account_level(), city.xp]
 	refresh_roster()
 	var ray: Dictionary = city.individuals[selected_ray]
 	var species: Dictionary = city.ray_species(selected_ray)
@@ -879,11 +1032,18 @@ func ink(value: String, pos: Vector2, font_size: int, color: Color = Color("#eef
 	draw_string(ThemeDB.fallback_font, pos, value, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
 
 func _draw() -> void:
-	draw_rect(Rect2(18, 109, 716, 456), Color("#12617a"))
-	draw_circle(Vector2(370, 345), 220, Color("#197d8c"))
-	# Paint a distinct noninteractive header behind the land title and map controls.
-	draw_rect(Rect2(18, 109, 716, 89), Color("#183d4b"))
-	draw_rect(Rect2(744, 109, 340, 508), Color("#183d4b"))
+	if compact_mode:
+		draw_rect(Rect2(Vector2.ZERO, size), Color("#183d4b"))
+		if compact_page != 0:
+			return
+		draw_set_transform_matrix(compact_map_transform)
+		draw_rect(Rect2(18, 198, 716, 367), Color("#12617a"))
+	else:
+		draw_rect(Rect2(18, 109, 716, 456), Color("#12617a"))
+		draw_circle(Vector2(370, 345), 220, Color("#197d8c"))
+		# Paint a distinct noninteractive header behind the land title and map controls.
+		draw_rect(Rect2(18, 109, 716, 89), Color("#183d4b"))
+		draw_rect(Rect2(744, 109, 340, 508), Color("#183d4b"))
 	for key in city.owned_sectors:
 		var parts: PackedStringArray = key.split(",")
 		var sx: int = int(parts[0]) * 4

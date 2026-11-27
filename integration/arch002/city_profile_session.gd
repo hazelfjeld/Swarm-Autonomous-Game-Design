@@ -351,11 +351,15 @@ func _confirm_recovery(reply: Dictionary) -> bool:
 	if not verified.initialize_from_text(reply.observed_text):
 		_fail()
 		return false
-	var observed: Dictionary = verified.committed()
-	# Normalize JSON numeric representations through the same encoding/parser
-	# rather than relying on int/float identity after the JS round trip.
-	var expected: Variant = JSON.parse_string(JSON.stringify(_recovery_expected, "", true, true))
-	if observed != expected:
+	# Both envelopes must pass the same validator and normalization path.
+	# Parsing alone leaves JSON numbers as floats, whereas Commit normalizes
+	# the generation and wall marker to integers. Compare canonical full
+	# envelopes (not only generation) to reject any changed domain state.
+	var expected = Commit.new(_valid_city)
+	if not expected.initialize_from_text(JSON.stringify(_recovery_expected, "", true, true)):
+		_fail()
+		return false
+	if JSON.stringify(verified.committed(), "", true, true) != JSON.stringify(expected.committed(), "", true, true):
 		_fail()
 		return false
 	_recovery_text = ""

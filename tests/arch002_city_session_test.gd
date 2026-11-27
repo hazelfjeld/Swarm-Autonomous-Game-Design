@@ -47,7 +47,7 @@ func _initialize() -> void:
 	_run_previous_validation()
 	_run_distinct_revision_rollback()
 	_run_recovery_choice()
-	_check(checks == 129, "all native session scenarios reached")
+	_check(checks == 131, "all native session scenarios reached")
 	print(JSON.stringify({"city_profile_session": "pass" if failures.is_empty() else "fail", "checks": checks, "failures": failures}))
 	quit(0 if failures.is_empty() else 1)
 
@@ -344,6 +344,19 @@ func _run_recovery_choice() -> void:
 	bad_session.stage_recovery(str(bad_preview.get("confirmation","")), marker + 1000)
 	bad_port.deliver({"kind":"recovery","ok":true,"status":"recovered","storage_revision":3,"observed_text":JSON.stringify({"storage_revision":3,"wall_marker_ms":marker + 1001,"model":model})})
 	_check(not bad_session.poll(marker) and bad_session.status() == "unavailable" and bad_session.snapshot().is_empty(), "unexpected readback fails closed")
+	# A valid but different city with identical generation and marker must
+	# still fail readback. This guards against weakening the equality check.
+	var wrong_model: Dictionary = model.duplicate(true)
+	wrong_model.gold = int(wrong_model.gold) + 1
+	var wrong_port := FakePort.new()
+	var wrong_session = Session.new()
+	wrong_session.start(wrong_port)
+	wrong_port.deliver({"kind":"open","ok":false,"status":"recovery-required","previous":prior})
+	wrong_session.poll(marker)
+	var wrong_preview: Dictionary = wrong_session.preview_recovery()
+	_check(City.validate_snapshot(wrong_model) and wrong_session.stage_recovery(str(wrong_preview.get("confirmation","")), marker + 1000), "valid wrong-model readback fixture staged")
+	wrong_port.deliver({"kind":"recovery","ok":true,"status":"recovered","storage_revision":3,"observed_text":JSON.stringify({"storage_revision":3,"wall_marker_ms":marker + 1000,"model":wrong_model})})
+	_check(not wrong_session.poll(marker) and wrong_session.status() == "unavailable" and wrong_session.snapshot().is_empty(), "same-generation changed city rejected")
 	var refused_port := FakePort.new()
 	refused_port.allow_recovery = false
 	var refused = Session.new()

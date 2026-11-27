@@ -1481,6 +1481,7 @@ jobs:
                       const t = db.transaction("profiles", corrupt || replacement ? "readwrite" : "readonly");
                       const store = t.objectStore("profiles");
                       const a = store.get("active"), p = store.get("previous"), archive = store.get("recovery-original");
+                      const archiveKey = store.getKey("recovery-original");
                       const badText = '{"fault":';
                       let original;
                       p.onsuccess = () => {
@@ -1493,7 +1494,7 @@ jobs:
                           store.put(replacement.previous, "previous");
                         } else if (corrupt) store.put(badText, "active");
                       };
-                      t.oncomplete = () => ok({original, archive: archive.result ?? null, observed: replacement || {
+                      t.oncomplete = () => ok({original, archive: archive.result ?? null, archivePresent: archiveKey.result !== undefined, observed: replacement || {
                         active: corrupt ? badText : original.active, previous: original.previous}});
                       t.onabort = () => bad(t.error || new Error("Missing recovery pair"));
                       t.onerror = () => bad(t.error);
@@ -1582,7 +1583,7 @@ jobs:
           def capture(name):
               (evidence / (name + ".png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
           try:
-              with tempfile.TemporaryDirectory(prefix="arch002-persistent-city-") as profile:
+              with tempfile.TemporaryDirectory(prefix="arch002-persistent-city-") as profile, tempfile.TemporaryDirectory(prefix="arch002-compact-profiles-") as compact_profiles:
                   wait(driver_ready, "ChromeDriver ready", 15)
                   opened = api("POST", "/session", {"capabilities":{"alwaysMatch":{"browserName":"chrome",
                       "goog:chromeOptions":{"args":["--headless=new","--window-size=1200,1000",
@@ -1784,14 +1785,52 @@ jobs:
                   capture("16-recovery-reloaded")
                   (evidence/"recovery-confirmed-observation.json").write_text(json.dumps({"status":"pass","recovered":recovered,"archive_preserved":True,"reopened":True}, indent=2))
 
-                  # The desktop path above is retained verbatim. Test the same
-                  # player-visible backup/recovery boundaries in both compact
-                  # orientations using actual rendered control rectangles.
+                  # A second corruption in the SAME disposable profile must not
+                  # overwrite its immutable recovery archive or offer recovery again.
+                  api("POST", session + "/url", {"url":inert_url})
+                  assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                  second_fault = raw_city_pair(True)
+                  assert second_fault["archivePresent"] and second_fault["archive"] == restored_pair["archive"]
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "second corrupt city loader")
+                  second_blocked = wait(blocked_city, "second corruption fails closed")
+                  assert not second_blocked["recovery_open"] and "Save unavailable" in second_blocked["footer"], second_blocked
+                  second_read = raw_city_pair()
+                  assert second_read["observed"] == second_fault["observed"]
+                  assert second_read["archivePresent"] and second_read["archive"] == restored_pair["archive"]
+                  capture("17-second-corruption-blocked")
+                  api("POST", session + "/refresh", {})
+                  wait(bounds, "second corruption reload")
+                  second_reload = wait(blocked_city, "second corruption remains blocked")
+                  assert not second_reload["recovery_open"] and "Save unavailable" in second_reload["footer"], second_reload
+                  second_read = raw_city_pair()
+                  assert second_read["observed"] == second_fault["observed"]
+                  assert second_read["archivePresent"] and second_read["archive"] == restored_pair["archive"]
+                  (evidence/"second-corruption-observation.json").write_text(json.dumps({"status":"pass","archive_preserved":True,"raw_pair_preserved":True,"recovery_refused":True,"reload_blocked":True}, indent=2))
+                  print(json.dumps({"second_corruption_archive_preserved":"pass"}), flush=True)
+
+                  # Each compact orientation starts in an independent fresh
+                  # disposable browser profile. The normal backup replacement
+                  # below creates its valid active/previous pair. Do not clear
+                  # the desktop archive or reset a real player's storage.
                   compact_observations = []
                   for width, height in ((390,844),(844,390)):
                       tag = f"{width}x{height}"
+                      api("DELETE", session)
+                      session = None
+                      compact_profile = pathlib.Path(compact_profiles) / tag
+                      compact_profile.mkdir()
+                      compact_opened = api("POST", "/session", {"capabilities":{"alwaysMatch":{"browserName":"chrome",
+                          "goog:chromeOptions":{"args":["--headless=new","--window-size=1200,1000",
+                              "--disable-dev-shm-usage","--user-data-dir="+str(compact_profile)]}}}})
+                      session = "/session/" + compact_opened["sessionId"]
+                      api("POST", session + "/timeouts", {"script":10000,"pageLoad":30000})
                       api("POST", session + "/goog/cdp/execute", {"cmd":"Emulation.setDeviceMetricsOverride",
                           "params":{"width":width,"height":height,"deviceScaleFactor":1,"mobile":False}})
+                      api("POST", session + "/url", {"url":url})
+                      wait(bounds, "fresh compact city loader "+tag)
+                      assert js("return typeof window.littleRayCityProfilePort?.begin_open === 'function'")
+                      observe(lambda m: m["gold"] == 1200 and m["food"] == 240, "fresh compact durable city "+tag)
                       wait(lambda: (v if (v := view()) and v["viewport_size"] == [width,height] and v["layout_controls"]["book_tab"]["visible"] else None), "compact layout "+tag)
                       compact_geometry(["book_tab"], ["book_tab"])
                       compact_click("book_tab")
@@ -1824,7 +1863,14 @@ jobs:
                       wait(lambda: not view()["backup_open"], "compact modal closed "+tag)
                       api("POST", session + "/url", {"url":inert_url})
                       assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                      valid_seed = raw_city_pair()
+                      assert not valid_seed["archivePresent"] and valid_seed["archive"] is None, "compact profile already archived"
+                      seed_active = json.loads(valid_seed["observed"]["active"])
+                      seed_previous = json.loads(valid_seed["observed"]["previous"])
+                      assert seed_active["storage_revision"] == seed_previous["storage_revision"] + 1
+                      assert seed_active["model"]["revision"] >= seed_previous["model"]["revision"]
                       fault = raw_city_pair(True)
+                      assert not fault["archivePresent"] and fault["original"] == valid_seed["observed"]
                       raw = fault["observed"]
                       api("POST", session + "/url", {"url":url})
                       wait(bounds, "compact corrupt loader "+tag)
@@ -1848,13 +1894,13 @@ jobs:
                           assert saved()["active"]["model"][k] == restored_model[k], k
                       assert raw_city_pair()["archive"] == restored_compact["archive"]
                       capture("compact-"+tag+"-reloaded")
-                      compact_observations.append({"viewport":[width,height],"book":book_rects,"backup":backup_rects,"recovery":recovery_rects,"preview_preserved":True,"restored":True,"archive_preserved":True,"reopened":True})
+                      compact_observations.append({"viewport":[width,height],"book":book_rects,"backup":backup_rects,"recovery":recovery_rects,"preview_preserved":True,"restored":True,"fresh_profile":True,"archive_absent_before_fault":True,"archive_preserved":True,"reopened":True})
                       print(json.dumps({"compact_city_recovery":"pass","viewport":[width,height]}), flush=True)
                   (evidence/"compact-backup-recovery.json").write_text(json.dumps(compact_observations,indent=2))
                   report = {"persistent_city":"pass","browser":opened["capabilities"].get("browserVersion"),
                       "compact_backup_recovery":compact_observations,
                       "manifest":json.loads((root/"integration-manifest.json").read_text()),
-                      "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload","paid crop matures and harvests once","harvest persists after reload","portable city export and preview","explicit restore with previous-good","reload and command after restore","malformed active save fails closed and preserves previous-good","unsupported previous schema fails closed and preserves both copies","explicit corrupted-save recovery preserves archive and reopens selected city"],
+                      "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload","paid crop matures and harvests once","harvest persists after reload","portable city export and preview","explicit restore with previous-good","reload and command after restore","malformed active save fails closed and preserves previous-good","unsupported previous schema fails closed and preserves both copies","explicit corrupted-save recovery preserves archive and reopens selected city","second corruption refuses recovery and preserves raw pair/archive across reload","isolated compact backup/recovery in portrait and landscape"],
                       "fresh":fresh,"planted":planted,"fed":fed,"collected":collected,"restored":restored,"after":after,
                       "before_harvest":before_harvest,"harvested":harvested,"harvest_reloaded":final,
                       "backup_exported":exported,"backup_before_restore":before_restore,"backup_replacement":replacement,

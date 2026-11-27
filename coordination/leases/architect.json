@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "architect",
-  "run_id": "architect-20261127T0710Z-g85-recovery-adapter",
+  "run_id": null,
   "generation": 85,
-  "acquired_at": "2026-11-27T07:09:37.074Z",
-  "expires_at": "2026-11-27T07:39:37.074Z"
+  "acquired_at": null,
+  "expires_at": null
 }

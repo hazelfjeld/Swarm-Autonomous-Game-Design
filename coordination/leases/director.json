@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "director",
-  "generation": 135,
-  "run_id": null,
-  "acquired_at": null,
-  "expires_at": null
+  "generation": 136,
+  "run_id": "director-mountain-mover-20261127T1454Z-compact-audit",
+  "acquired_at": "2026-11-27T14:54:00.000Z",
+  "expires_at": "2026-11-27T15:24:00.000Z"
 }

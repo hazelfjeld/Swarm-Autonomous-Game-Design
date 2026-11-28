@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 175,
-  "run_id": "director-mountain-mover-20261128T0952Z-pending-fixture",
-  "acquired_at": "2026-11-28T09:54:00.347Z",
-  "expires_at": "2026-11-28T10:24:00.347Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

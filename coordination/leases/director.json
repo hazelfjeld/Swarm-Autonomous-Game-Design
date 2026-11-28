@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 193,
-  "run_id": "mountain-mover-20261128T1844Z-portable-upgrade",
-  "acquired_at": "2026-11-28T18:44:20.287Z",
-  "expires_at": "2026-11-28T19:14:20.287Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

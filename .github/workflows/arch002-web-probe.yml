@@ -1015,7 +1015,9 @@ jobs:
               backup_text = TextEdit.new()
               backup_text.position = Vector2(100, 235)
               backup_text.size = Vector2(900, 335)
-              backup_text.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+              # Isolate line wrapping from the measured large portable JSON assignment stall.
+              # Keep complete editable/copyable data, exact preview/restore and all timeouts.
+              backup_text.wrap_mode = TextEdit.LINE_WRAPPING_NONE
               backup_text.placeholder_text = "Exported or pasted portable city JSON"
               backup_text.text_changed.connect(backup_input_changed)
               backup_panel.add_child(backup_text)

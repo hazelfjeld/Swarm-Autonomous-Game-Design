@@ -89,6 +89,8 @@ var desktop_controls: Dictionary = {}
 var compact_map_transform := Transform2D.IDENTITY
 var compact_status: RichTextLabel
 var compact_save: RichTextLabel
+var compact_scroll: ScrollContainer
+var compact_scroll_content: Control
 
 func label_at(value: String, position_: Vector2, size_: Vector2, font_size: int = 20) -> Label:
 	var item := Label.new()
@@ -226,7 +228,7 @@ func _ready() -> void:
 	else:
 		adapter.capture(city.snapshot())
 	var args := OS.get_cmdline_user_args()
-	if profile_session == null and args.size() == 2 and args[0] == "--capture-city":
+	if profile_session == null and get_parent() == get_tree().root and args.size() == 2 and args[0] == "--capture-city":
 		capture_mode = true
 		call_deferred("capture_fixture", args[1])
 
@@ -254,6 +256,18 @@ func setup_city_layout() -> void:
 		compact_nav.append(tab)
 	compact_status = make_compact_message(14)
 	compact_save = make_compact_message(13)
+	# Only overflowing action panels use this clipped scrolling surface. The
+	# desktop and previously fitting compact layouts retain their direct controls.
+	compact_scroll = ScrollContainer.new()
+	compact_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	compact_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
+	compact_scroll.follow_focus = true
+	compact_scroll.scroll_deadzone = 8
+	add_child(compact_scroll)
+	compact_scroll_content = Control.new()
+	compact_scroll_content.mouse_filter = Control.MOUSE_FILTER_PASS
+	compact_scroll.add_child(compact_scroll_content)
+	compact_scroll.hide()
 	resized.connect(apply_city_layout)
 	apply_city_layout()
 
@@ -309,9 +323,47 @@ func compact_grid(controls: Array, x: float, y: float, w: float, columns: int) -
 		compact_place(control, x + (i % columns) * (width_ + 8.0), y + floori(float(i) / columns) * 56.0, width_, 48.0)
 	return y + ceili(float(controls.size()) / columns) * 56.0
 
+# Return the original controls before applying another page or desktop layout.
+# No new buttons or alternate domain commands are created.
+func reset_compact_scroll() -> void:
+	for child in compact_scroll_content.get_children():
+		child.reparent(self, false)
+	compact_scroll.hide()
+	compact_scroll_content.custom_minimum_size = Vector2.ZERO
+	compact_scroll.scroll_vertical = 0
+
+func fit_compact_actions(actions: Array, area: Rect2) -> void:
+	if area.size.x <= 0.0 or area.size.y <= 0.0:
+		return
+	var overflow: bool = false
+	for item in actions:
+		var control: Control = item
+		if control.get_rect().end.y > area.end.y:
+			overflow = true
+	if not overflow:
+		return
+	# Keep control heights; reserve a scrollbar gutter rather than scaling the
+	# panel or moving actions on top of the persistent status/save messages.
+	var gutter: float = maxf(24.0, compact_scroll.get_v_scroll_bar().get_combined_minimum_size().x + 8.0)
+	var content_width: float = maxf(1.0, area.size.x - gutter)
+	var width_ratio: float = content_width / area.size.x
+	var content_height: float = 0.0
+	compact_scroll.position = area.position
+	compact_scroll.size = area.size
+	for item in actions:
+		var control: Control = item
+		var old: Rect2 = control.get_rect()
+		control.reparent(compact_scroll_content, false)
+		control.position = Vector2(floorf((old.position.x - area.position.x) * width_ratio), old.position.y - area.position.y)
+		control.size = Vector2(floorf(old.size.x * width_ratio), old.size.y)
+		content_height = maxf(content_height, control.get_rect().end.y)
+	compact_scroll_content.custom_minimum_size = Vector2(content_width, ceilf(content_height) + 4.0)
+	compact_scroll.show()
+
 func apply_city_layout() -> void:
 	if desktop_controls.is_empty():
 		return
+	reset_compact_scroll()
 	var needs_compact: bool = size.x < 1100.0 or size.y < 880.0
 	if not needs_compact:
 		if compact_mode:
@@ -335,24 +387,34 @@ func apply_city_layout() -> void:
 			queue_redraw()
 		return
 	compact_mode = true
-	var w: float = maxf(320.0, size.x) - 16.0
-	var h: float = maxf(390.0, size.y)
+	var w: float = maxf(1.0, size.x - 16.0)
+	var h: float = size.y
 	for control in desktop_controls:
 		control.hide()
 	compact_label(wallet, 8, 4, w, 26, 16)
-	var nav_columns: int = mini(compact_nav.size(), maxi(1, floori((w + 4.0) / 48.0)))
-	var nav_width: float = floorf((w - (nav_columns - 1) * 4.0) / nav_columns)
+	var nav_x: float = 8.0
+	var nav_span: float = w
+	var nav_gap: float = 4.0
+	# A 320px portrait can fit seven 44px tabs using a 1px gap, freeing
+	# a whole row without shrinking the targets.
+	if h < 600.0 and w < 332.0 and size.x >= 318.0:
+		nav_x = 2.0
+		nav_span = size.x - 4.0
+		nav_gap = 1.0
+	var nav_columns: int = mini(compact_nav.size(), maxi(1, floori((nav_span + nav_gap) / (MIN_CONTROL_TARGET + nav_gap))))
+	var nav_width: float = floorf((nav_span - (nav_columns - 1) * nav_gap) / nav_columns)
 	for i in range(compact_nav.size()):
 		var tab: Button = compact_nav[i]
-		compact_place(tab, 8 + (i % nav_columns) * (nav_width + 4.0), 34 + floori(float(i) / nav_columns) * 48.0, nav_width, 44.0)
+		compact_place(tab, nav_x + (i % nav_columns) * (nav_width + nav_gap), 34 + floori(float(i) / nav_columns) * 48.0, nav_width, 44.0)
 		tab.set_pressed_no_signal(i == compact_page)
 	var nav_bottom: float = 34.0 + ceili(float(compact_nav.size()) / nav_columns) * 48.0
 	compact_label(goal_label, 8, nav_bottom, w, 38, 14)
 	# Landscape keeps the previous 72-unit footprint; taller screens can
 	# dedicate additional space without taking a row from any action panel.
-	var message_band: float = 120.0 if h >= 600.0 else 72.0
+	var side_messages: bool = h < 600.0 and w >= 500.0
+	var message_band: float = 120.0 if h >= 600.0 else (72.0 if side_messages else 96.0)
 	var message_top: float = h - message_band
-	if h < 600.0 and w >= 580.0:
+	if side_messages:
 		var message_width: float = floorf((w - 8.0) / 2.0)
 		compact_place(compact_status, 8, message_top, message_width, message_band - 4.0)
 		compact_place(compact_save, 16 + message_width, message_top, message_width, message_band - 4.0)
@@ -367,10 +429,12 @@ func apply_city_layout() -> void:
 	match compact_page:
 		0: # Map, sample and explicit placement preview.
 			var area: Rect2
-			if columns == 2:
+			if columns == 2 or (w >= 500.0 and h < 390.0):
 				var side: float = minf(300.0, floorf(w * 0.4))
 				var map_width: float = w - side - 8.0
-				compact_grid([sample_button, map_mode_button, cancel_preview_button], 8 + map_width + 8.0, top, side, 1)
+				var side_x: float = 8.0 + map_width + 8.0
+				compact_grid([sample_button, map_mode_button, cancel_preview_button], side_x, top, side, 1)
+				fit_compact_actions([sample_button, map_mode_button, cancel_preview_button], Rect2(side_x, top, side, bottom - top))
 				compact_label(land_label, 8, top, map_width, 26)
 				area = Rect2(8, top + 28.0, map_width, maxf(1.0, bottom - top - 28.0))
 			else:
@@ -402,6 +466,15 @@ func apply_city_layout() -> void:
 			compact_label(collection_info, 8, top, w, 34)
 			compact_label(sale_note, 8, top + 34.0, w, 36)
 			compact_grid([collection_button, favorite_button, sell_button], 8, top + 74.0, w, columns)
+	if compact_page != 0:
+		var panel_actions: Array = []
+		for control in desktop_controls:
+			if control.visible and control != wallet and control != goal_label:
+				panel_actions.append(control)
+		# Reparent in visual row order, retaining keyboard focus traversal.
+		panel_actions.sort_custom(func(a: Control, b: Control) -> bool:
+			return a.position.y < b.position.y or (a.position.y == b.position.y and a.position.x < b.position.x))
+		fit_compact_actions(panel_actions, Rect2(8, top, w, bottom - top))
 	queue_redraw()
 
 func option_at(at: Vector2, dimensions: Vector2) -> OptionButton:
@@ -1674,7 +1747,80 @@ func capture_fixture(directory: String) -> void:
 		get_tree().quit(1)
 		return
 	print("CITY_PROFILE_VIEW_PASS: startup hidden until acknowledgement, restored operation ID, no speculative feed or overlap, retained pending elapsed, slow acknowledgement leaves a ready interval, uncertain save freezes confirmed view")
+	if not await short_city_layout_fixture():
+		push_error("Short city action layout fixture failed")
+		get_tree().quit(1)
+		return
 	get_tree().quit(0)
+
+# Native GUI fixture: a bounded child view at each logical size, actual theme
+# minimums and scroll clipping. Does not substitute for served CSS/touch tests.
+func short_city_layout_fixture() -> bool:
+	for dimensions in [Vector2(568, 320), Vector2(640, 360), Vector2(667, 375), Vector2(320, 480)]:
+		var view = get_script().new()
+		view.size = dimensions
+		view.clip_contents = true
+		add_child(view)
+		view.set_process(false)
+		var pages: Array = [
+			[view.sample_button, view.map_mode_button, view.cancel_preview_button],
+			[view.build_choice, view.coordinate_x, view.coordinate_y, view.build_button, view.cancel_build_button],
+			[view.ray_choice, view.name_edit, view.feed_button, view.level_button],
+			[view.habitat_choice, view.collect_button, view.move_ray_button, view.upgrade_button],
+			[view.farm_choice, view.plant_short, view.plant_long, view.harvest_button],
+			[view.shop_choice, view.buy_button, view.place_egg_button],
+			[view.collection_button, view.favorite_button, view.sell_button]]
+		var bounds := Rect2(view.global_position, dimensions)
+		var good: bool = true
+		for page in range(pages.size()):
+			view.choose_compact_page(page)
+			await get_tree().process_frame
+			await get_tree().process_frame
+			var fixed_controls: Array = [view.compact_status, view.compact_save]
+			fixed_controls.append_array(view.compact_nav)
+			for fixed_control in fixed_controls:
+				var fixed_rect: Rect2 = fixed_control.get_global_rect()
+				good = good and fixed_control.is_visible_in_tree() and bounds.grow(0.1).encloses(fixed_rect) and minf(fixed_rect.size.x, fixed_rect.size.y) >= MIN_CONTROL_TARGET
+			for control in pages[page]:
+				var scrolls: bool = control.get_parent() == view.compact_scroll_content
+				if scrolls:
+					view.compact_scroll.ensure_control_visible(control)
+					await get_tree().process_frame
+					await get_tree().process_frame
+				var rect: Rect2 = control.get_global_rect()
+				var reachable: bool = control.is_visible_in_tree() and bounds.grow(0.1).encloses(rect) and minf(rect.size.x, rect.size.y) >= MIN_CONTROL_TARGET
+				if scrolls:
+					reachable = reachable and view.compact_scroll.get_global_rect().grow(0.1).encloses(rect)
+				for fixed_control in fixed_controls:
+					reachable = reachable and not rect.intersects(fixed_control.get_global_rect())
+				if not reachable:
+					push_error("Short city target unreachable: %s page %d %s %s" % [dimensions, page, control.name, rect])
+				good = good and reachable
+			# Actual pointer action after scrolling, not just a rectangle check.
+			if page == 2 and good:
+				if view.feed_button.get_parent() == view.compact_scroll_content:
+					view.compact_scroll.ensure_control_visible(view.feed_button)
+					await get_tree().process_frame
+					await get_tree().process_frame
+				var food_before: int = view.city.food
+				var cost: int = view.city.feed_cost(view.selected_ray)
+				await click_fixture(view.feed_button)
+				good = good and cost > 0 and view.city.food == food_before - cost
+			if page == 4 and good:
+				view.act("plant", "farm-1:sprout")
+				view.city.advance(60000)
+				view.refresh()
+				var food_before: int = view.city.food
+				await click_fixture(view.harvest_button)
+				good = good and view.city.food == food_before + 40
+		view.size = Vector2(1100, 880)
+		await get_tree().process_frame
+		good = good and not view.compact_mode and not view.compact_scroll.visible and view.compact_scroll_content.get_child_count() == 0 and view.feed_button.get_parent() == view
+		view.free()
+		if not good:
+			return false
+	print("CITY_SHORT_LAYOUT_PASS: four logical sizes, all 26 actions reachable, fixed messages/nav separate, pointer feed and harvest, desktop restoration")
+	return true
 
 # CI-only interface double: actual city model, controlled acknowledgement.
 # This verifies the view contract, not browser storage or the architect's port.

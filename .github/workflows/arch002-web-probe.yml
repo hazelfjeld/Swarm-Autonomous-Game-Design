@@ -2365,6 +2365,87 @@ jobs:
                       "actual_site_verified":False}
                   (evidence/"large-city-browser.json").write_text(json.dumps(large_report,indent=2))
                   print(json.dumps(large_report), flush=True)
+                  # Isolated final browser fault: a genuine IndexedDB versionchange
+                  # after an acknowledged save and armed, visible backup preview.
+                  # Never upgrade a profile used by any other scenario or player.
+                  api("DELETE", session)
+                  session = None
+                  idle_profile = pathlib.Path(compact_profiles) / "idle-invalidation"
+                  idle_profile.mkdir()
+                  idle_opened = api("POST", "/session", {"capabilities":{"alwaysMatch":{"browserName":"chrome",
+                      "goog:chromeOptions":{"args":["--headless=new","--window-size=1200,1000",
+                          "--disable-dev-shm-usage","--user-data-dir="+str(idle_profile)]}}}})
+                  session = "/session/" + idle_opened["sessionId"]
+                  api("POST", session + "/timeouts", {"script":15000,"pageLoad":30000})
+                  api("POST", session + "/goog/cdp/execute", {"cmd":"Emulation.setDeviceMetricsOverride",
+                      "params":{"width":1100,"height":880,"deviceScaleFactor":1,"mobile":False}})
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "idle invalidation loader")
+                  observe(lambda m: m["gold"] == 1200 and m["food"] == 240, "idle fixture fresh city")
+                  click("feed", 830, 363)
+                  observe(lambda m: m["food"] == 235, "idle fixture previous-good")
+                  compact_click("backup", "backup")
+                  wait(lambda: view()["backup_open"] and view()["phase"] == "ready", "idle backup opened")
+                  compact_click("export")
+                  wait(lambda: view()["backup_message"].startswith("Confirmed backup exported"), "idle backup exported")
+                  compact_click("preview")
+                  before_idle = wait(lambda: (v if (v := view()) and v["phase"] == "ready" and not v["backup_restore_disabled"]
+                      and v["backup_message"].startswith("Replace current city") else None), "idle preview armed")
+                  capture("idle-backup-before")
+                  def idle_raw_records(version=None):
+                      return clipboard_call("""
+                        const version = arguments[0], name = "little-ray-city-checkpoint-v2";
+                        const operation = (async () => {
+                          const db = await new Promise((ok,bad) => {
+                            const req = version === null ? indexedDB.open(name) : indexedDB.open(name,version);
+                            req.onsuccess = () => ok(req.result);
+                            req.onerror = () => bad(req.error);
+                            req.onblocked = () => bad(Error("upgrade blocked"));
+                            req.onupgradeneeded = e => {
+                              if (version !== 2 || e.oldVersion !== 1 || e.newVersion !== 2) req.transaction.abort();
+                            };
+                          });
+                          try {
+                            return await new Promise((ok,bad) => {
+                              const tx = db.transaction("profiles","readonly"), store = tx.objectStore("profiles");
+                              const keys = ["active","previous","recovery-original"];
+                              const values = keys.map(key => store.get(key)), present = keys.map(key => store.getKey(key));
+                              tx.oncomplete = () => ok({version:db.version,records:keys.map((key,i) => ({
+                                key,present:present[i].result !== undefined,value:values[i].result ?? null
+                              }))});
+                              tx.onabort = tx.onerror = () => bad(tx.error);
+                            });
+                          } finally { db.close(); }
+                        })();
+                      """, (version,))
+                  idle_pair = idle_raw_records()
+                  assert idle_pair["version"] == 1 and all(x["present"] for x in idle_pair["records"][:2])
+                  assert not idle_pair["records"][2]["present"], "Idle fixture must not share a recovered profile"
+                  idle_upgraded = idle_raw_records(2)
+                  assert idle_upgraded["version"] == 2 and idle_upgraded["records"] == idle_pair["records"], "Upgrade changed durable records"
+                  def idle_fenced():
+                      v = view()
+                      return v if v and v["phase"] == "unavailable" and v["backup_open"] and v["backup_restore_disabled"] and v["disabled"]["backup"] and "Save unavailable" in v["backup_message"] else None
+                  idle_fenced_view = wait(idle_fenced, "idle invalidation visible in backup UI")
+                  assert idle_fenced_view["domain_revision"] == before_idle["domain_revision"], "Invalidation changed visible confirmed revision"
+                  capture("idle-backup-invalidated")
+                  compact_click("restore")
+                  time.sleep(.35)
+                  assert idle_fenced() and view()["domain_revision"] == before_idle["domain_revision"]
+                  assert idle_raw_records() == idle_upgraded, "Disabled restore changed durable records"
+                  compact_click("close")
+                  idle_closed = wait(lambda: (v if (v := view()) and not v["backup_open"] and v["phase"] == "unavailable"
+                      and all(v["disabled"][k] for k in ("backup","plant","feed","collect","harvest")) else None), "closed modal retains action fence")
+                  assert idle_closed["domain_revision"] == before_idle["domain_revision"]
+                  assert idle_raw_records() == idle_upgraded, "Closing backup changed durable records"
+                  capture("idle-backup-closed")
+                  idle_report = {"idle_backup_invalidation":"pass","fresh_disposable_profile":True,
+                      "real_indexeddb_upgrade":[1,2],"preview_armed_before_fault":True,
+                      "visible_unavailable":True,"restore_disabled":True,"city_actions_disabled_after_close":True,
+                      "confirmed_revision_unchanged":True,"exact_active_previous_archive_preserved":True,
+                      "actual_site_verified":False}
+                  (evidence/"idle-backup-invalidation.json").write_text(json.dumps(idle_report,indent=2))
+                  print(json.dumps(idle_report), flush=True)
           except Exception as error:
               if session:
                   try:

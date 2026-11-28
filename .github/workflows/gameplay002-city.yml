@@ -103,9 +103,18 @@ jobs:
           s = s.replace("func _ready() -> void:\n", "func _ready() -> void:\n\tcall_deferred(\"_start_compact_probe\")\n", 1)
           # Read-only instrumentation, never copied back to the submitted project.
           s += """
+          var compact_probe_wheel_count: int = 0
+          var compact_probe_last_wheel: Dictionary = {}
+
+          func _input(event: InputEvent) -> void:
+          \tif event is InputEventMouseButton and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+          \t\tcompact_probe_wheel_count += 1
+          \t\tcompact_probe_last_wheel = {"x": event.position.x, "y": event.position.y, "button": event.button_index, "factor": event.factor}
+
           func _start_compact_probe() -> void:
           \tif not OS.has_feature("web"):
           \t\treturn
+          \tJavaScriptBridge.eval("window.cityWheelTrace = {count:0,last:null,move:null}; window.addEventListener('wheel', e => { const t=window.cityWheelTrace; t.count++; t.last={x:e.clientX,y:e.clientY,deltaY:e.deltaY,canvas:e.target===document.querySelector('canvas'),trusted:e.isTrusted}; }, {capture:true,passive:true}); window.addEventListener('mousemove', e => { window.cityWheelTrace.move={x:e.clientX,y:e.clientY,canvas:e.target===document.querySelector('canvas')}; }, {capture:true,passive:true});")
           \tvar timer := Timer.new()
           \ttimer.wait_time = 0.2
           \ttimer.timeout.connect(_compact_probe)
@@ -137,10 +146,11 @@ jobs:
           \tif compact_scroll.visible:
           \t\tvar transform: Transform2D = compact_scroll.get_viewport().get_screen_transform() * compact_scroll.get_global_transform_with_canvas()
           \t\tvar rect: Rect2 = transform * Rect2(Vector2.ZERO, compact_scroll.size)
-          \t\tscroll = {"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y, "offset": compact_scroll.scroll_vertical}
+          \t\tvar bar: VScrollBar = compact_scroll.get_v_scroll_bar()
+          \t\tscroll = {"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y, "offset": compact_scroll.scroll_vertical, "min": bar.min_value, "max": bar.max_value, "page": bar.page, "value": bar.value, "content_height": compact_scroll_content.size.y, "minimum_height": compact_scroll_content.custom_minimum_size.y}
           \tvar window_size := get_window().size
           \tvar crop_active: bool = not city.farm_crop("farm-1").is_empty()
-          \tvar report := {"window": [window_size.x, window_size.y], "controls": rows, "gold": city.gold, "food": city.food, "crop_active": crop_active, "crop_ready": crop_active and city.remaining_seconds("farm-1") == 0, "sample_disabled": sample_button.disabled, "compact": compact_mode, "page": compact_page, "nav": nav, "messages": messages, "scroll": scroll}
+          \tvar report := {"window": [window_size.x, window_size.y], "controls": rows, "gold": city.gold, "food": city.food, "crop_active": crop_active, "crop_ready": crop_active and city.remaining_seconds("farm-1") == 0, "sample_disabled": sample_button.disabled, "compact": compact_mode, "page": compact_page, "nav": nav, "messages": messages, "scroll": scroll, "wheel_count": compact_probe_wheel_count, "last_wheel": compact_probe_last_wheel}
           \tJavaScriptBridge.eval("window.cityCompactProbe = " + JSON.stringify(report))
           """
           p.write_text(s)
@@ -191,7 +201,7 @@ jobs:
                 const c=document.querySelector('canvas'), p=window.cityCompactProbe;
                 if(!c || !p || document.getElementById('status')) return null;
                 return {canvas:c.getBoundingClientRect().toJSON(), backing:[c.width,c.height],
-                        viewport:[innerWidth,innerHeight], dpr:devicePixelRatio, probe:p};
+                        viewport:[innerWidth,innerHeight], dpr:devicePixelRatio, probe:p, domWheel:window.cityWheelTrace};
               """)
           def css_rect(rect, frame):
               canvas = frame["canvas"]
@@ -247,13 +257,37 @@ jobs:
                   if encloses(pane, target):
                       return frame
                   delta = 64 if target["y"]+target["h"] > pane["y"]+pane["h"] else -64
-                  offset = frame["probe"]["scroll"]["offset"]
-                  api("POST", session + "/actions", {"actions":[{"type":"wheel","id":"wheel","actions":[
-                      {"type":"scroll","duration":80,"origin":"viewport","x":round(pane["x"]+pane["w"]/2),
-                       "y":round(pane["y"]+pane["h"]/2),"deltaX":0,"deltaY":delta}]}]})
-                  frame = wait(lambda: (v if (v := observe()) and v["probe"]["scroll"]
-                                        and v["probe"]["scroll"]["offset"] != offset else None),
-                               "wheel scroll " + key, 5)
+                  x, y = round(pane["x"]+pane["w"]/2), round(pane["y"]+pane["h"]/2)
+                  # W3C wheel and pointer sources are distinct. Move the real
+                  # pointer first to update any cached engine hover position.
+                  api("POST", session + "/actions", {"actions":[{"type":"pointer","id":"mouse","parameters":{"pointerType":"mouse"},"actions":[
+                      {"type":"pointerMove","duration":80,"origin":"viewport","x":x,"y":y}]}]})
+                  time.sleep(.25)
+                  before = observe() or frame
+                  offset = before["probe"]["scroll"]["offset"]
+                  trace = {"viewport":frame["viewport"],"page":frame["probe"]["page"],"key":key,
+                           "attempt":attempt,"delta":delta,"pointer":[x,y],"before":before}
+                  report.setdefault("wheel_attempts", []).append(trace)
+                  retain()
+                  try:
+                      api("POST", session + "/actions", {"actions":[{"type":"wheel","id":"wheel","actions":[
+                          {"type":"scroll","duration":80,"origin":"viewport","x":x,
+                           "y":y,"deltaX":0,"deltaY":delta}]}]})
+                      frame = wait(lambda: (v if (v := observe()) and v["probe"]["scroll"]
+                                            and v["probe"]["scroll"]["offset"] != offset else None),
+                                   "wheel scroll " + key, 5)
+                      trace["after"] = frame
+                      trace["result"] = "offset_changed"
+                  except Exception as err:
+                      trace["result"] = "failed"
+                      trace["error"] = str(err)
+                      try:
+                          trace["after"] = observe()
+                          (evidence / (label + "-wheel-failure-" + key + ".png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+                      finally:
+                          retain()
+                      raise
+                  retain()
               raise AssertionError("Unable to reveal short viewport control: " + key)
           # Pure conversion/classifier sanity checks; actual engine geometry follows.
           f = {"canvas":{"x":10,"y":20,"width":550,"height":440,"right":560,"bottom":460},
@@ -288,6 +322,8 @@ jobs:
                       assert frame["probe"]["gold"] == 1200 and not frame["probe"]["sample_disabled"]
                       case = {"viewport":label, "frame":frame, "controls":{}, "sample_click":"not_attempted",
                               "navigation_failures":[], "page_navigation":[], "overlaps":[], "short_actions":{}}
+                      report["cases"].append(case)
+                      retain()
                       (evidence / (label + "-before.png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
                       compact = width < 1100 or height < 880
                       assert frame["probe"]["compact"] == compact, "Wrong layout mode " + label
@@ -401,7 +437,6 @@ jobs:
                           assert set(case["short_actions"]) == {"feed","plant","harvest"}
                       (evidence / (label + "-after.png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
                       case["failing_controls"] = [key for key,row in case["controls"].items() if row["failures"]]
-                      report["cases"].append(case)
                       retain()
                       print(json.dumps({"viewport":label,"failing_controls":case["failing_controls"],"sample_click":case["sample_click"], "short_actions":case["short_actions"]}), flush=True)
                   report["pass"] = all(not c["failing_controls"] and not c["navigation_failures"] and not c["overlaps"]

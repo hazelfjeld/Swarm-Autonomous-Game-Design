@@ -1682,9 +1682,20 @@ jobs:
           trace = []
           def view():
               return js("return window.arch002CityState ? JSON.parse(window.arch002CityState) : null;")
+          readiness_polls = []
           def ready(kind):
               state = view()
-              return state if state and state["phase"] == "ready" and state["confirmed"] and not state["invalid"] and not state["overlay"] and not state["disabled"][kind] and 0 <= state["ready_age_ms"] < 300 else None
+              # Opening Backup is read-only; its handler defers during an in-flight save.
+              # Economic actions still require a fresh acknowledgement, with no retries.
+              eligible = bool(state and state["phase"] == "ready" and state["confirmed"] and not state["invalid"] and not state["overlay"] and not state["disabled"][kind] and (kind == "backup" or 0 <= state["ready_age_ms"] < 300))
+              poll = {"kind": kind, "monotonic": time.monotonic(), "eligible": eligible}
+              if state:
+                  poll.update({k: state.get(k) for k in ("phase", "confirmed", "invalid", "overlay", "ready_age_ms", "tick_age_ms", "backup_open_pending", "domain_revision")})
+                  poll["disabled"] = state["disabled"][kind]
+              readiness_polls.append(poll)
+              del readiness_polls[:-128]
+              (evidence / "readiness-polls.json").write_text(json.dumps(readiness_polls, indent=2))
+              return state if eligible else None
           def record(label):
               item = {"label": label, "view": view(), "canvas": bounds(), "saved": saved()}
               trace.append(item)

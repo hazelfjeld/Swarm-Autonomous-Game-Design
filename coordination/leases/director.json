@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "director",
   "generation": 174,
-  "run_id": "director-20261128T0856Z-174-autom11",
-  "acquired_at": "2026-11-28T08:56:46.521Z",
-  "expires_at": "2026-11-28T09:26:46.521Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

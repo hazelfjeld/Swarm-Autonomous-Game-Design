@@ -1,0 +1,512 @@
+name: GAMEPLAY-002 exact-head city checkpoint
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'game/city_checkpoint/**'
+      - '.github/workflows/gameplay002-city.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gameplay002-city
+  cancel-in-progress: true
+
+jobs:
+  city:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'swarm/gameplay/GAMEPLAY-002'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify official engine and templates
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          cd "$RUNNER_TEMP"
+          base=https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable
+          curl --fail --location --retry 2 --connect-timeout 20 --max-time 420 "$base/Godot_v4.7.2-stable_linux.x86_64.zip" -o editor.zip
+          curl --fail --location --retry 2 --connect-timeout 20 --max-time 600 "$base/Godot_v4.7.2-stable_export_templates.tpz" -o templates.tpz
+          printf '%s\n' 'cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4  editor.zip' 'f298490b8d44d934be425a5a65a51bf15f422428b229a06a6e11d9ffea248011  templates.tpz' | sha256sum --check --strict
+          unzip -q editor.zip
+          chmod +x Godot_v4.7.2-stable_linux.x86_64
+          test "$(./Godot_v4.7.2-stable_linux.x86_64 --version)" = '4.7.2.stable.official.ed1daf0bf'
+          target="$HOME/.local/share/godot/export_templates/4.7.2.stable"
+          mkdir -p "$target"
+          unzip -j -q templates.tpz templates/version.txt templates/web_nothreads_release.zip templates/web_nothreads_debug.zip -d "$target"
+      - name: Native import and deterministic state tests
+        run: |
+          set -euo pipefail
+          godot="$RUNNER_TEMP/Godot_v4.7.2-stable_linux.x86_64"
+          "$godot" --headless --path game/city_checkpoint --editor --import
+          "$godot" --headless --path game/city_checkpoint --script res://tests.gd
+          "$godot" --headless --path game/city_checkpoint --quit-after 5
+      - name: Single-thread web export
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/city-build"
+          "$RUNNER_TEMP/Godot_v4.7.2-stable_linux.x86_64" --headless --path game/city_checkpoint --export-release Web "$RUNNER_TEMP/city-build/index.html"
+          test -s "$RUNNER_TEMP/city-build/index.wasm"
+          test -s "$RUNNER_TEMP/city-build/index.pck"
+          git rev-parse HEAD > "$RUNNER_TEMP/city-build/source-commit.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: city-web-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/city-build
+          if-no-files-found: error
+          retention-days: 3
+      - name: Native GUI input and screenshot fixture
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/city-evidence"
+          command -v xvfb-run
+          timeout 250 xvfb-run -a "$RUNNER_TEMP/Godot_v4.7.2-stable_linux.x86_64" --path game/city_checkpoint --audio-driver Dummy -- --capture-city "$RUNNER_TEMP/city-evidence"
+          test -s "$RUNNER_TEMP/city-evidence/01-opening.png"
+          test -s "$RUNNER_TEMP/city-evidence/02-after-input.png"
+          test -s "$RUNNER_TEMP/city-evidence/03-earned-and-harvested.png"
+          test -s "$RUNNER_TEMP/city-evidence/04-built-light-habitat.png"
+          test -s "$RUNNER_TEMP/city-evidence/05-two-founders.png"
+          test -s "$RUNNER_TEMP/city-evidence/06-expanded-land.png"
+          test -s "$RUNNER_TEMP/city-evidence/07-storage-recovery.png"
+          git rev-parse HEAD > "$RUNNER_TEMP/city-evidence/source-commit.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: city-native-evidence-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/city-evidence
+          if-no-files-found: warn
+          retention-days: 3
+
+      # Separate instrumented standalone export; ordinary city-web above is unchanged.
+      - name: Compact served city control geometry and input
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          command -v google-chrome
+          command -v chromedriver
+          mkdir -p "$RUNNER_TEMP/city-compact-evidence" "$RUNNER_TEMP/city-compact-export"
+          cp -a game/city_checkpoint "$RUNNER_TEMP/city-compact-project"
+          rm -rf "$RUNNER_TEMP/city-compact-project/.godot"
+          python3 - <<'PY'
+          import os, pathlib
+          p = pathlib.Path(os.environ["RUNNER_TEMP"]) / "city-compact-project/city_view.gd"
+          s = p.read_text()
+          assert s.count("func _ready() -> void:\n") == 1
+          s = s.replace("func _ready() -> void:\n", "func _ready() -> void:\n\tcall_deferred(\"_start_compact_probe\")\n", 1)
+          # Read-only instrumentation, never copied back to the submitted project.
+          s += """
+          var compact_probe_wheel_count: int = 0
+          var compact_probe_last_wheel: Dictionary = {}
+
+          func _input(event: InputEvent) -> void:
+          \tif event is InputEventMouseButton and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+          \t\tcompact_probe_wheel_count += 1
+          \t\tcompact_probe_last_wheel = {"x": event.position.x, "y": event.position.y, "button": event.button_index, "factor": event.factor}
+
+          func _start_compact_probe() -> void:
+          \tif not OS.has_feature("web"):
+          \t\treturn
+          \tJavaScriptBridge.eval("window.cityWheelTrace = {count:0,last:null,move:null}; window.addEventListener('wheel', e => { const t=window.cityWheelTrace; t.count++; t.last={x:e.clientX,y:e.clientY,deltaY:e.deltaY,canvas:e.target===document.querySelector('canvas'),trusted:e.isTrusted}; }, {capture:true,passive:true}); window.addEventListener('mousemove', e => { window.cityWheelTrace.move={x:e.clientX,y:e.clientY,canvas:e.target===document.querySelector('canvas')}; }, {capture:true,passive:true});")
+          \tvar timer := Timer.new()
+          \ttimer.wait_time = 0.2
+          \ttimer.timeout.connect(_compact_probe)
+          \tadd_child(timer)
+          \ttimer.start()
+
+          func _compact_probe() -> void:
+          \tvar names := ["name_edit", "sample_button", "collect_button", "feed_button", "level_button", "farm_choice", "plant_short", "plant_long", "harvest_button", "build_choice", "coordinate_x", "coordinate_y", "build_button", "cancel_build_button", "map_mode_button", "cancel_preview_button", "ray_choice", "habitat_choice", "move_ray_button", "upgrade_button", "shop_choice", "buy_button", "place_egg_button", "collection_button", "favorite_button", "sell_button"]
+          \tvar rows: Dictionary = {}
+          \tfor key in names:
+          \t\tvar control: Control = get(key)
+          \t\tvar transform: Transform2D = control.get_viewport().get_screen_transform() * control.get_global_transform_with_canvas()
+          \t\tvar rect: Rect2 = transform * Rect2(Vector2.ZERO, control.size)
+          \t\trows[key] = {"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y, "visible": control.is_visible_in_tree(), "scrolls": control.get_parent() == compact_scroll_content}
+          \tvar nav: Array = []
+          \tfor tab in compact_nav:
+          \t\tvar transform: Transform2D = tab.get_viewport().get_screen_transform() * tab.get_global_transform_with_canvas()
+          \t\tvar rect: Rect2 = transform * Rect2(Vector2.ZERO, tab.size)
+          \t\tnav.append({"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y, "visible": tab.is_visible_in_tree()})
+          \tvar messages: Dictionary = {}
+          \tif compact_mode:
+          \t\tfor key in ["compact_status", "compact_save"]:
+          \t\t\tvar message: RichTextLabel = get(key)
+          \t\t\tvar transform: Transform2D = message.get_viewport().get_screen_transform() * message.get_global_transform_with_canvas()
+          \t\t\tvar rect: Rect2 = transform * Rect2(Vector2.ZERO, message.size)
+          \t\t\tvar original: Label = status_label if key == "compact_status" else profile_footer
+          \t\t\tmessages[key] = {"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y, "visible": message.is_visible_in_tree(), "text_matches": message.text == original.text, "content_height": message.get_content_height(), "local_height": message.size.y, "scroll_active": message.scroll_active}
+          \tvar scroll: Dictionary = {}
+          \tif compact_scroll.visible:
+          \t\tvar transform: Transform2D = compact_scroll.get_viewport().get_screen_transform() * compact_scroll.get_global_transform_with_canvas()
+          \t\tvar rect: Rect2 = transform * Rect2(Vector2.ZERO, compact_scroll.size)
+          \t\tvar bar: VScrollBar = compact_scroll.get_v_scroll_bar()
+          \t\tscroll = {"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y, "offset": compact_scroll.scroll_vertical, "min": bar.min_value, "max": bar.max_value, "page": bar.page, "value": bar.value, "content_height": compact_scroll_content.size.y, "minimum_height": compact_scroll_content.custom_minimum_size.y}
+          \tvar map_markers: Dictionary = {}
+          \tif not compact_mode or compact_page == 0:
+          \t\tvar transform: Transform2D = get_viewport().get_screen_transform() * get_global_transform_with_canvas()
+          \t\tvar targets := gold_marker_targets()
+          \t\tfor id in targets:
+          \t\t\tvar target: Rect2 = targets[id]
+          \t\t\tvar rect: Rect2 = transform * target
+          \t\t\tmap_markers[id] = {"x":rect.position.x,"y":rect.position.y,"w":rect.size.x,"h":rect.size.y}
+          \tvar window_size := get_window().size
+          \tvar crop_active: bool = not city.farm_crop("farm-1").is_empty()
+          \tvar report := {"window": [window_size.x, window_size.y], "controls": rows, "gold": city.gold, "food": city.food, "crop_active": crop_active, "crop_ready": crop_active and city.remaining_seconds("farm-1") == 0, "sample_disabled": sample_button.disabled, "compact": compact_mode, "page": compact_page, "nav": nav, "messages": messages, "scroll": scroll, "wheel_count": compact_probe_wheel_count, "last_wheel": compact_probe_last_wheel, "map_markers": map_markers, "tide_bin": city.stored_gold("tide-1"), "revision": city.revision}
+          \tJavaScriptBridge.eval("window.cityCompactProbe = " + JSON.stringify(report))
+          """
+          p.write_text(s)
+          PY
+          godot="$RUNNER_TEMP/Godot_v4.7.2-stable_linux.x86_64"
+          "$godot" --headless --path "$RUNNER_TEMP/city-compact-project" --editor --import
+          "$godot" --headless --path "$RUNNER_TEMP/city-compact-project" --export-release Web "$RUNNER_TEMP/city-compact-export/index.html"
+          python3 - <<'PY'
+          import base64, functools, http.server, json, os, pathlib
+          import subprocess, tempfile, threading, time, urllib.request
+
+          root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "city-compact-export"
+          evidence = root.parent / "city-compact-evidence"
+          report = {"source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+                    "instrumented_standalone": True, "actual_site_verified": False,
+                    "physical_touch_verified": False, "minimum_css_px": 44, "cases": []}
+          def retain():
+              (evidence / "compact-layout.json").write_text(json.dumps(report, indent=2))
+          retain()
+          server = http.server.ThreadingHTTPServer(("127.0.0.1", 0),
+              functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root)))
+          threading.Thread(target=server.serve_forever, daemon=True).start()
+          driver = subprocess.Popen(["chromedriver", "--port=9517"])
+          session = None
+          def api(method, path, value=None):
+              req = urllib.request.Request("http://127.0.0.1:9517" + path,
+                  data=None if value is None else json.dumps(value).encode(),
+                  headers={"Content-Type": "application/json"}, method=method)
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  return json.load(response)["value"]
+          def wait(fn, label, seconds=25):
+              deadline = time.monotonic() + seconds
+              while time.monotonic() < deadline:
+                  v = fn()
+                  if v:
+                      return v
+                  time.sleep(.15)
+              raise AssertionError("Timed out: " + label)
+          def driver_ready():
+              try:
+                  return api("GET", "/status").get("ready")
+              except OSError:
+                  return False
+          def js(source):
+              return api("POST", session + "/execute/sync", {"script": source, "args": []})
+          def observe():
+              return js("""
+                const c=document.querySelector('canvas'), p=window.cityCompactProbe;
+                if(!c || !p || document.getElementById('status')) return null;
+                return {canvas:c.getBoundingClientRect().toJSON(), backing:[c.width,c.height],
+                        viewport:[innerWidth,innerHeight], dpr:devicePixelRatio, probe:p, domWheel:window.cityWheelTrace};
+              """)
+          def css_rect(rect, frame):
+              canvas = frame["canvas"]
+              w, h = frame["probe"]["window"]
+              return {"x": canvas["x"] + rect["x"] * canvas["width"] / w,
+                      "y": canvas["y"] + rect["y"] * canvas["height"] / h,
+                      "w": rect["w"] * canvas["width"] / w,
+                      "h": rect["h"] * canvas["height"] / h}
+          def failures(rect, frame):
+              c = frame["canvas"]
+              vw, vh = frame["viewport"]
+              eps = .05  # floating-point tolerance, not a relaxed target
+              tags = []
+              if min(rect["w"], rect["h"]) < 44 - eps:
+                  tags.append("undersized")
+              if (rect["x"] < max(0, c["x"]) - eps or rect["y"] < max(0, c["y"]) - eps
+                  or rect["x"] + rect["w"] > min(vw, c["right"]) + eps
+                  or rect["y"] + rect["h"] > min(vh, c["bottom"]) + eps):
+                  tags.append("clipped")
+              return tags
+          # The compact view deliberately uses real navigation instead of fitting
+          # 26 controls on screen at once. Every original target is still
+          # measured at its reachable panel, plus the new navigation targets.
+          pages = [
+              ["sample_button", "map_mode_button", "cancel_preview_button"],
+              ["build_choice", "coordinate_x", "coordinate_y", "build_button", "cancel_build_button"],
+              ["ray_choice", "name_edit", "feed_button", "level_button"],
+              ["habitat_choice", "collect_button", "move_ray_button", "upgrade_button"],
+              ["farm_choice", "plant_short", "plant_long", "harvest_button"],
+              ["shop_choice", "buy_button", "place_egg_button"],
+              ["collection_button", "favorite_button", "sell_button"],
+          ]
+          def click_rect(b):
+              x, y = round(b["x"] + b["w"]/2), round(b["y"] + b["h"]/2)
+              api("POST", session + "/actions", {"actions":[{"type":"pointer","id":"mouse","parameters":{"pointerType":"mouse"},"actions":[
+                  {"type":"pointerMove","duration":50,"origin":"viewport","x":x,"y":y},
+                  {"type":"pointerDown","button":0},{"type":"pause","duration":80},{"type":"pointerUp","button":0}]}]})
+          def intersects(a, b):
+              return (min(a["x"]+a["w"], b["x"]+b["w"])-max(a["x"], b["x"]) > .05
+                      and min(a["y"]+a["h"], b["y"]+b["h"])-max(a["y"], b["y"]) > .05)
+          def encloses(outer, inner):
+              return (inner["x"] >= outer["x"]-.05 and inner["y"] >= outer["y"]-.05
+                      and inner["x"]+inner["w"] <= outer["x"]+outer["w"]+.05
+                      and inner["y"]+inner["h"] <= outer["y"]+outer["h"]+.05)
+          def reveal(frame, key):
+              # Use ordinary browser wheel events, never set engine scroll offsets.
+              for attempt in range(32):
+                  raw = frame["probe"]["controls"][key]
+                  if not raw["scrolls"]:
+                      return frame
+                  pane = css_rect(frame["probe"]["scroll"], frame)
+                  target = css_rect(raw, frame)
+                  if encloses(pane, target):
+                      return frame
+                  delta = 64 if target["y"]+target["h"] > pane["y"]+pane["h"] else -64
+                  x, y = round(pane["x"]+pane["w"]/2), round(pane["y"]+pane["h"]/2)
+                  # W3C wheel and pointer sources are distinct. Move the real
+                  # pointer first to update any cached engine hover position.
+                  api("POST", session + "/actions", {"actions":[{"type":"pointer","id":"mouse","parameters":{"pointerType":"mouse"},"actions":[
+                      {"type":"pointerMove","duration":80,"origin":"viewport","x":x,"y":y}]}]})
+                  time.sleep(.25)
+                  before = observe() or frame
+                  offset = before["probe"]["scroll"]["offset"]
+                  trace = {"viewport":frame["viewport"],"page":frame["probe"]["page"],"key":key,
+                           "attempt":attempt,"delta":delta,"pointer":[x,y],"before":before}
+                  report.setdefault("wheel_attempts", []).append(trace)
+                  retain()
+                  try:
+                      api("POST", session + "/actions", {"actions":[{"type":"wheel","id":"wheel","actions":[
+                          {"type":"scroll","duration":80,"origin":"viewport","x":x,
+                           "y":y,"deltaX":0,"deltaY":delta}]}]})
+                      frame = wait(lambda: (v if (v := observe()) and v["probe"]["scroll"]
+                                            and v["probe"]["scroll"]["offset"] != offset else None),
+                                   "wheel scroll " + key, 5)
+                      trace["after"] = frame
+                      trace["result"] = "offset_changed"
+                  except Exception as err:
+                      trace["result"] = "failed"
+                      trace["error"] = str(err)
+                      try:
+                          trace["after"] = observe()
+                          (evidence / (label + "-wheel-failure-" + key + ".png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+                      finally:
+                          retain()
+                      raise
+                  retain()
+              raise AssertionError("Unable to reveal short viewport control: " + key)
+          # Pure conversion/classifier sanity checks; actual engine geometry follows.
+          f = {"canvas":{"x":10,"y":20,"width":550,"height":440,"right":560,"bottom":460},
+               "probe":{"window":[1100,880]}, "viewport":[600,500]}
+          assert css_rect({"x":20,"y":40,"w":100,"h":44},f) == {"x":20,"y":40,"w":50,"h":22}
+          assert failures({"x":20,"y":40,"w":50,"h":22},f) == ["undersized"]
+          assert failures({"x":20,"y":40,"w":44,"h":44},f) == []
+          assert failures({"x":0,"y":40,"w":44,"h":44},f) == ["clipped"]
+          try:
+              with tempfile.TemporaryDirectory(prefix="city-compact-") as profile:
+                  wait(driver_ready, "ChromeDriver")
+                  opened = api("POST", "/session", {"capabilities":{"alwaysMatch":{"browserName":"chrome",
+                      "goog:chromeOptions":{"args":["--headless=new","--window-size=1200,1000",
+                          "--disable-dev-shm-usage","--user-data-dir="+profile]}}}})
+                  session = "/session/" + opened["sessionId"]
+                  report["browser"] = opened["capabilities"].get("browserVersion")
+                  api("POST", session + "/timeouts", {"script":10000,"pageLoad":30000})
+                  for width,height in [(1100,880),(1024,768),(768,1024),(390,844),(844,390),(568,320),(320,480)]:
+                      label = f"{width}x{height}"
+                      short_case = (width,height) in [(568,320),(320,480)]
+                      api("POST", session + "/goog/cdp/execute", {"cmd":"Emulation.setDeviceMetricsOverride",
+                          "params":{"width":width,"height":height,"deviceScaleFactor":1,"mobile":False}})
+                      api("POST", session + "/url", {"url":f"http://127.0.0.1:{server.server_port}/index.html?layout={label}"})
+                      def settled():
+                          f = observe()
+                          if f and f["viewport"] == [width,height] and f["dpr"] == 1 and f["backing"] == f["probe"]["window"]:
+                              return f
+                      frame = wait(settled, "consistent engine/backing/CSS geometry " + label)
+                      time.sleep(.4)
+                      frame = wait(settled, "settled layout " + label)
+                      assert len(frame["probe"]["controls"]) == 26
+                      assert frame["probe"]["gold"] == 1200 and not frame["probe"]["sample_disabled"]
+                      case = {"viewport":label, "frame":frame, "controls":{}, "sample_click":"not_attempted",
+                              "navigation_failures":[], "page_navigation":[], "overlaps":[], "short_actions":{}}
+                      report["cases"].append(case)
+                      retain()
+                      (evidence / (label + "-before.png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+                      compact = width < 1100 or height < 880
+                      assert frame["probe"]["compact"] == compact, "Wrong layout mode " + label
+                      expected_keys = set(frame["probe"]["controls"])
+                      assert len(expected_keys) == 26 and set(sum(pages, [])) == expected_keys and sum(map(len, pages)) == 26
+                      def measure_page(current, expected, page):
+                          active = {}
+                          rows = current["probe"]["controls"]
+                          if compact:
+                              unexpected = [key for key, raw in rows.items() if raw["visible"] and key not in expected]
+                              case["navigation_failures"].extend(f"page {page}: unexpected visible {key}" for key in unexpected)
+                              assert len(current["probe"]["nav"]) == len(pages)
+                              for i, raw in enumerate(current["probe"]["nav"]):
+                                  rect = css_rect(raw, current)
+                                  tags = failures(rect, current) + ([] if raw["visible"] else ["hidden"])
+                                  case["navigation_failures"].extend(f"page {page} nav {i}: {tag}" for tag in tags)
+                                  active[f"nav_{i}"] = rect
+                              messages = current["probe"]["messages"]
+                              assert set(messages) == {"compact_status", "compact_save"}
+                              for key, raw in messages.items():
+                                  rect = css_rect(raw, current)
+                                  tags = failures(rect, current) + ([] if raw["visible"] else ["hidden"])
+                                  case["navigation_failures"].extend(f"page {page} {key}: {tag}" for tag in tags)
+                                  if not raw["text_matches"] or not raw["scroll_active"]:
+                                      case["navigation_failures"].append(f"page {page} {key}: message lost or scrolling disabled")
+                                  if raw["content_height"] <= 0 or (not short_case and raw["content_height"] > raw["local_height"]):
+                                      case["navigation_failures"].append(f"page {page} {key}: initial message does not fully fit")
+                                  active[key] = rect
+                          for key in expected:
+                              if short_case:
+                                  current = reveal(current, key)
+                                  rows = current["probe"]["controls"]
+                              raw = rows[key]
+                              rect = css_rect(raw, current)
+                              tags = failures(rect, current) + ([] if raw["visible"] else ["hidden"])
+                              if short_case and raw["scrolls"]:
+                                  pane = css_rect(current["probe"]["scroll"], current)
+                                  if not encloses(pane, rect):
+                                      tags.append("scroll-clipped")
+                              case["controls"][key] = {"rect":rect,"page":page,"failures":tags}
+                              if short_case:
+                                  # Each measured action is fully revealed. Compare with
+                                  # fixed controls and other actions at this same offset,
+                                  # not rectangles collected at different scroll positions.
+                                  for b, other in active.items():
+                                      if intersects(rect, other):
+                                          case["overlaps"].append(f"page {page}: {key}/{b}")
+                                  for b in expected:
+                                      if b != key and rows[b]["visible"] and intersects(rect, css_rect(rows[b], current)):
+                                          case["overlaps"].append(f"page {page}: {key}/{b}")
+                              else:
+                                  active[key] = rect
+                          for i, (a, rect) in enumerate(active.items()):
+                              for b, other in list(active.items())[i+1:]:
+                                  if intersects(rect, other):
+                                      case["overlaps"].append(f"page {page}: {a}/{b}")
+                          return current
+                      if not compact:
+                          measure_page(frame, expected_keys, 0)
+                      else:
+                          assert frame["probe"]["page"] == 0
+                          for page, expected in enumerate(pages):
+                              if page:
+                                  nav = frame["probe"]["nav"][page]
+                                  click_rect(css_rect(nav, frame))
+                                  frame = wait(lambda: (v if (v := observe()) and v["probe"]["page"] == page else None), "navigation page " + str(page), 5)
+                              frame = measure_page(frame, expected, page)
+                              if short_case and page == 2:
+                                  frame = reveal(frame, "feed_button")
+                                  before_food = frame["probe"]["food"]
+                                  click_rect(css_rect(frame["probe"]["controls"]["feed_button"], frame))
+                                  frame = wait(lambda: (v if (v := observe()) and v["probe"]["food"] < before_food else None), "short feed click", 5)
+                                  case["short_actions"]["feed"] = "passed"
+                              if short_case and page == 4:
+                                  frame = reveal(frame, "plant_short")
+                                  click_rect(css_rect(frame["probe"]["controls"]["plant_short"], frame))
+                                  frame = wait(lambda: (v if (v := observe()) and v["probe"]["crop_active"] else None), "short paid crop click", 5)
+                                  case["short_actions"]["plant"] = "passed"
+                              case["page_navigation"].append(page)
+                              (evidence / (label + "-page-" + str(page) + ".png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+                          click_rect(css_rect(frame["probe"]["nav"][0], frame))
+                          frame = wait(lambda: (v if (v := observe()) and v["probe"]["page"] == 0 else None), "return to map", 5)
+                      assert set(case["controls"]) == expected_keys
+                      sample = case["controls"]["sample_button"]
+                      sample_gold = frame["probe"]["gold"]
+                      if "clipped" not in sample["failures"]:
+                          if short_case:
+                              frame = reveal(frame, "sample_button")
+                          b = css_rect(frame["probe"]["controls"]["sample_button"], frame) if short_case else sample["rect"]
+                          click_rect(b)
+                          try:
+                              after = wait(lambda: (v if (v := observe()) and v["probe"]["gold"] == sample_gold + 10 and v["probe"]["sample_disabled"] else None), "one sample credit " + label, 5)
+                              if compact:
+                                  case["after_messages"] = after["probe"]["messages"]
+                                  for key, raw in case["after_messages"].items():
+                                      if not raw["text_matches"] or raw["content_height"] <= 0 or (not short_case and raw["content_height"] > raw["local_height"]):
+                                          case["navigation_failures"].append(f"after sample {key}: message lost or clipped")
+                              case["sample_click"] = "passed"
+                          except AssertionError:
+                              case["sample_click"] = "failed"
+                      # Ordinary browser pointer input on the exact rendered Gold target.
+                      # A level-one Common earns 2 Gold/min: first whole Gold at 30s.
+                      # Allow 15s additional scheduling slack; do not alter the clock or rate.
+                      case["map_marker_wait"] = {"timeout_s":45,"result":"pending","last":None}
+                      def marker_ready():
+                          v = observe()
+                          if not v:
+                              return None
+                          p = v["probe"]
+                          case["map_marker_wait"]["last"] = {"tide_bin":p["tide_bin"],
+                              "map_markers":p["map_markers"],"page":p["page"],"gold":p["gold"],
+                              "revision":p["revision"]}
+                          return v if p["tide_bin"] > 0 and "tide-1" in p["map_markers"] else None
+                      try:
+                          frame = wait(marker_ready, "visible starter Gold marker " + label, 45)
+                      except AssertionError:
+                          case["map_marker_wait"]["result"] = "timeout"
+                          retain()
+                          (evidence / (label + "-gold-marker-timeout.png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+                          raise
+                      case["map_marker_wait"]["result"] = "ready"
+                      retain()
+                      marker = css_rect(frame["probe"]["map_markers"]["tide-1"], frame)
+                      case["map_marker"] = {"rect":marker,"before_gold":frame["probe"]["gold"],
+                                             "before_revision":frame["probe"]["revision"],
+                                             "before_bin":frame["probe"]["tide_bin"],"result":"pending"}
+                      retain()
+                      assert not failures(marker, frame), "Gold map marker undersized/clipped " + label
+                      for key, raw in frame["probe"]["controls"].items():
+                          if raw["visible"]:
+                              assert not intersects(marker, css_rect(raw, frame)), "Gold map marker overlaps " + key
+                      (evidence / (label + "-gold-marker.png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+                      click_rect(marker)
+                      previous = frame["probe"]
+                      frame = wait(lambda: (v if (v := observe()) and v["probe"]["gold"] > previous["gold"]
+                                            and v["probe"]["revision"] == previous["revision"] + 1 else None),
+                                   "direct map Gold collection " + label, 5)
+                      case["map_marker"].update({"result":"passed","after_gold":frame["probe"]["gold"],
+                                                  "after_revision":frame["probe"]["revision"]})
+                      retain()
+                      if short_case:
+                          # Ordinary one-minute crop: no injected clock or free Food.
+                          frame = wait(lambda: (v if (v := observe()) and v["probe"]["crop_ready"] else None), "short real-time crop readiness", 75)
+                          click_rect(css_rect(frame["probe"]["nav"][4], frame))
+                          frame = wait(lambda: (v if (v := observe()) and v["probe"]["page"] == 4 else None), "return to farm", 5)
+                          frame = reveal(frame, "harvest_button")
+                          before_food = frame["probe"]["food"]
+                          click_rect(css_rect(frame["probe"]["controls"]["harvest_button"], frame))
+                          frame = wait(lambda: (v if (v := observe()) and not v["probe"]["crop_active"] and v["probe"]["food"] == before_food + 40 else None), "short harvest click", 5)
+                          case["short_actions"]["harvest"] = "passed"
+                          assert set(case["short_actions"]) == {"feed","plant","harvest"}
+                      (evidence / (label + "-after.png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+                      case["failing_controls"] = [key for key,row in case["controls"].items() if row["failures"]]
+                      retain()
+                      print(json.dumps({"viewport":label,"failing_controls":case["failing_controls"],"sample_click":case["sample_click"], "short_actions":case["short_actions"]}), flush=True)
+                  report["pass"] = all(not c["failing_controls"] and not c["navigation_failures"] and not c["overlaps"]
+                                       and c["sample_click"] == "passed" for c in report["cases"])
+                  retain()
+                  # Preserve failures as evidence rather than silently claiming touch support.
+                  assert report["pass"], "Served control target/access failure; inspect compact-layout.json"
+          finally:
+              if session:
+                  try:
+                      api("DELETE", session)
+                  except Exception:
+                      pass
+              driver.terminate()
+              driver.wait(timeout=10)
+              server.shutdown()
+          PY
+      - name: Retain compact served-layout evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: city-compact-evidence
+          path: ${{ runner.temp }}/city-compact-evidence
+          if-no-files-found: warn
+          retention-days: 3

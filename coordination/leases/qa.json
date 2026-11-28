@@ -2,7 +2,7 @@
   "schema_version": 1,
   "role": "qa",
   "generation": 115,
-  "run_id": "qa-2026-11-28T19:38:14.481Z-g115",
-  "acquired_at": "2026-11-28T19:38:14.481Z",
-  "expires_at": "2026-11-28T20:08:14.481Z"
+  "run_id": null,
+  "acquired_at": null,
+  "expires_at": null
 }

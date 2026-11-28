@@ -1086,14 +1086,28 @@ jobs:
               if not restore_pending:
                   backup_message.text = "Preview is required before replacement."
 
+          # Test-only phase markers; never log the portable data itself.
+          func export_trace(stage: String, count: int = -1) -> void:
+              if diagnostic_window == null:
+                  return
+              var marker := "LR_EXPORT_TRACE stage=%s ticks_ms=%d chars=%d" % [stage, Time.get_ticks_msec(), count]
+              print(marker)
+              JavaScriptBridge.eval("console.error(" + JSON.stringify(marker) + ")")
+
           func export_backup_text() -> void:
+              export_trace("before_serialization")
               var encoded: String = session.export_backup()
+              export_trace("after_serialization", encoded.length())
               invalidate_backup_preview()
               if encoded.is_empty():
                   backup_message.text = "No confirmed backup available."
                   return
+              export_trace("before_text_assignment", encoded.length())
               backup_text.text = encoded
+              export_trace("after_text_assignment", encoded.length())
               backup_message.text = "Confirmed backup exported to text. Select and copy it somewhere safe."
+              if diagnostic_window != null:
+                  get_tree().process_frame.connect(func(): export_trace("next_process_frame"), CONNECT_ONE_SHOT)
 
           func preview_backup_text() -> void:
               invalidate_backup_preview()
@@ -1951,7 +1965,9 @@ jobs:
                   large_profile.mkdir()
                   large_opened = api("POST", "/session", {"capabilities":{"alwaysMatch":{"browserName":"chrome",
                       "goog:chromeOptions":{"args":["--headless=new","--window-size=1200,1000",
-                          "--disable-dev-shm-usage","--user-data-dir="+str(large_profile)]}}}})
+                          "--disable-dev-shm-usage","--enable-logging",
+                          "--log-file="+str(evidence/"large-chrome.log"),
+                          "--user-data-dir="+str(large_profile)]}}}})
                   session = "/session/" + large_opened["sessionId"]
                   api("POST", session + "/timeouts", {"script":30000,"pageLoad":30000})
                   api("POST", session + "/goog/cdp/execute", {"cmd":"Emulation.setDeviceMetricsOverride",
@@ -2058,6 +2074,17 @@ jobs:
                   driver.kill()
                   driver.wait()
               server.shutdown()
+              # Retain renderer phase markers even when WebDriver cannot respond.
+              # Print only the structured marker, not arbitrary browser log text.
+              import re
+              trace_path = evidence/"large-chrome.log"
+              if trace_path.exists():
+                  markers = re.findall(r"LR_EXPORT_TRACE stage=[a-z_]+ ticks_ms=\d+ chars=-?\d+",
+                      trace_path.read_text(errors="replace"))
+                  (evidence/"large-export-trace.json").write_text(json.dumps(markers, indent=2))
+                  print(json.dumps({"large_export_trace":markers}), flush=True)
+              else:
+                  print("Large export renderer log unavailable", flush=True)
           PY
       - name: Retain combined city export and browser evidence (not hosted)
         if: always()

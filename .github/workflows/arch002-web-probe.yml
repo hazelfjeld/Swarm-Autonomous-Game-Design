@@ -861,14 +861,14 @@ jobs:
       - name: Checkout exact city validation seam (independent input)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 93f23bc962fda87f7fe28fae1e2b279d77200f66
+          ref: 9ef45a520348921424994cc955cd39794defeeb6
           path: .arch002-city-source
           persist-credentials: false
       - name: Native city and staged-profile roundtrip (not hosted)
         timeout-minutes: 4
         run: |
           set -euo pipefail
-          test "$(git -C .arch002-city-source rev-parse HEAD)" = "93f23bc962fda87f7fe28fae1e2b279d77200f66"
+          test "$(git -C .arch002-city-source rev-parse HEAD)" = "9ef45a520348921424994cc955cd39794defeeb6"
           project="$RUNNER_TEMP/arch002-city-integration"
           mkdir -p "$project"
           cp -a .arch002-city-source/game/city_checkpoint/. "$project/"
@@ -1464,6 +1464,10 @@ jobs:
                   process_recovery()
               if diagnostic_window == null:
                   return
+              var starter_marker: Rect2 = city.gold_marker_targets().get("tide-1", Rect2())
+              var nav_geometry: Array = []
+              for tab in city.compact_nav:
+                  nav_geometry.append(control_geometry(tab))
               diagnostic_window.arch002CityState = JSON.stringify({
                   "phase": session.status(), "confirmed": city.profile_confirmed,
                   "invalid": city.profile_view_invalid, "overlay": city.profile_overlay.visible,
@@ -1484,6 +1488,8 @@ jobs:
                   "rects": {"plant": str(city.plant_short.get_global_rect()), "feed": str(city.feed_button.get_global_rect()), "collect": str(city.collect_button.get_global_rect()), "harvest": str(city.harvest_button.get_global_rect())},
                   "viewport": str(city.get_viewport_rect().size),
                   "viewport_size": [city.size.x, city.size.y], "compact_page": city.compact_page,
+                  "starter_marker": [starter_marker.position.x, starter_marker.position.y, starter_marker.size.x, starter_marker.size.y],
+                  "starter_bin": city.city.stored_gold("tide-1"), "map_nav_geometry": nav_geometry,
                   "book_scroll_offset": city.compact_scroll.scroll_vertical,
                   "backup_scroll_offset": backup_body.scroll_vertical,
                   "recovery_scroll_offset": recovery_body.scroll_vertical,
@@ -2046,9 +2052,47 @@ jobs:
                       api("POST", session + "/url", {"url":url})
                       wait(bounds, "fresh compact city loader "+tag)
                       assert js("return typeof window.littleRayCityProfilePort?.begin_open === 'function'")
-                      observe(lambda m: m["gold"] == 1200 and m["food"] == 240, "fresh compact durable city "+tag)
+                      compact_fresh = observe(lambda m: m["gold"] == 1200 and m["food"] == 240, "fresh compact durable city "+tag)
                       wait(lambda: (v if (v := view()) and v["viewport_size"] == [width,height] and v["layout_controls"]["book_tab"]["visible"] else None), "compact layout "+tag)
                       compact_geometry(["book_tab"], ["book_tab"])
+                      # Exercise the newly pinned map target against real
+                      # acknowledged persistence, not the session-only fixture.
+                      def marker_ready():
+                          v = view()
+                          if v and v["compact_page"] == 0 and v["starter_bin"] > 0 and min(v["starter_marker"][2:]) > 0 and v["confirmed"] and not v["invalid"] and not v["overlay"]:
+                              return v
+                          return None
+                      marker_view = wait(marker_ready, "natural resident Gold target "+tag, 45)
+                      x,y,w,h = marker_view["starter_marker"]
+                      b = bounds()
+                      vw,vh = marker_view["viewport_size"]
+                      sx,sy = b["width"]/vw,b["height"]/vh
+                      assert encloses((0,0,vw,vh),(x,y,w,h)) and w*sx >= 44 and h*sy >= 44, marker_view
+                      blockers = marker_view["map_nav_geometry"] + [marker_view["layout_controls"][k] for k in ("status_band","save_band")]
+                      for g in blockers:
+                          if g["visible"]:
+                              xx,yy,ww,hh = g["rect"]
+                              assert min(x+w,xx+ww) <= max(x,xx) or min(y+h,yy+hh) <= max(y,yy), (marker_view,g)
+                      capture("compact-"+tag+"-map-marker")
+                      api("POST", session + "/actions", {"actions":[{"type":"pointer","id":"mouse","parameters":{"pointerType":"mouse"},"actions":[
+                          {"type":"pointerMove","duration":50,"origin":"viewport","x":round(b["x"]+sx*(x+w/2)),"y":round(b["y"]+sy*(y+h/2))}]}]})
+                      # Use the same ready-window discipline as other commands.
+                      # Never retry an uncertain click or bypass the real input.
+                      wait(lambda: ready("collect"), "confirmed map collection "+tag, 15)
+                      api("POST", session + "/actions", {"actions":[{"type":"pointer","id":"mouse","parameters":{"pointerType":"mouse"},"actions":[
+                          {"type":"pointerDown","button":0},{"type":"pause","duration":80},{"type":"pointerUp","button":0}]}]})
+                      initial_model = compact_fresh["active"]["model"]
+                      marker_saved = observe(lambda m: len(m["receipts"]) > len(initial_model["receipts"]), "durable map collection "+tag)
+                      marker_model = marker_saved["active"]["model"]
+                      new_receipts = {k:v for k,v in marker_model["receipts"].items() if k not in initial_model["receipts"]}
+                      assert len(new_receipts) == 1 and all(marker_model["receipts"].get(k) == v for k,v in initial_model["receipts"].items()), new_receipts
+                      receipt = next(iter(new_receipts.values()))
+                      delta = marker_model["gold"] - initial_model["gold"]
+                      assert delta > 0 and marker_model["revision"] == initial_model["revision"] + 1, marker_model
+                      assert receipt["kind"] == "collect" and receipt["argument"] == "tide-1" and receipt["message"].startswith(f"+{delta} resident Gold"), receipt
+                      marker_evidence = {"rect":[x,y,w,h],"css_size":[w*sx,h*sy],"gold_delta":delta,"receipt":receipt,"revision_delta":1,"durable":True}
+                      capture("compact-"+tag+"-map-collected")
+                      print(json.dumps({"compact_map_collection":tag,"marker":marker_evidence}),flush=True)
                       compact_click("book_tab")
                       wait(lambda: view()["compact_page"] == 6 and view()["layout_controls"]["backup"]["visible"], "compact Book "+tag)
                       short = height <= 480 and width <= 568
@@ -2158,7 +2202,7 @@ jobs:
                           assert saved()["active"]["model"][k] == restored_model[k], k
                       assert raw_city_pair()["archive"] == restored_compact["archive"]
                       capture("compact-"+tag+"-reloaded")
-                      compact_observations.append({"viewport":[width,height],"book":book_rects,"backup":backup_rects,"recovery":recovery_rects,"backup_open_attempt":opened_backup["backup_open_attempt"],"preview_preserved":True,"restored":True,"fresh_profile":True,"archive_absent_before_fault":True,"archive_preserved":True,"reopened":True})
+                      compact_observations.append({"viewport":[width,height],"map_marker":marker_evidence,"book":book_rects,"backup":backup_rects,"recovery":recovery_rects,"backup_open_attempt":opened_backup["backup_open_attempt"],"preview_preserved":True,"restored":True,"fresh_profile":True,"archive_absent_before_fault":True,"archive_preserved":True,"reopened":True})
                       print(json.dumps({"compact_city_recovery":"pass","viewport":[width,height]}), flush=True)
                   (evidence/"compact-backup-recovery.json").write_text(json.dumps(compact_observations,indent=2))
                   report = {"persistent_city":"pass","browser":opened["capabilities"].get("browserVersion"),

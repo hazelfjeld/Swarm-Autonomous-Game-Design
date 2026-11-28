@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "director",
-  "generation": 166,
-  "run_id": null,
-  "acquired_at": null,
-  "expires_at": null
+  "generation": 167,
+  "run_id": "director-mountain-mover-20261128T0544Z-short-viewport-runtime",
+  "acquired_at": "2026-11-28T05:44:13.831Z",
+  "expires_at": "2026-11-28T06:14:13.831Z"
 }

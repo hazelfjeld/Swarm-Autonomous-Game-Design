@@ -328,6 +328,8 @@ func compact_grid(controls: Array, x: float, y: float, w: float, columns: int) -
 func reset_compact_scroll() -> void:
 	for child in compact_scroll_content.get_children():
 		child.reparent(self, false)
+		# Keep returned controls underneath the architect-owned blocking overlay.
+		move_child(child, compact_scroll.get_index())
 	compact_scroll.hide()
 	compact_scroll_content.custom_minimum_size = Vector2.ZERO
 	compact_scroll.scroll_vertical = 0
@@ -1747,7 +1749,7 @@ func capture_fixture(directory: String) -> void:
 		get_tree().quit(1)
 		return
 	print("CITY_PROFILE_VIEW_PASS: startup hidden until acknowledgement, restored operation ID, no speculative feed or overlap, retained pending elapsed, slow acknowledgement leaves a ready interval, uncertain save freezes confirmed view")
-	if not await short_city_layout_fixture():
+	if not (await short_city_layout_fixture()):
 		push_error("Short city action layout fixture failed")
 		get_tree().quit(1)
 		return

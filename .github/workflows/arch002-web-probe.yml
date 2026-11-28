@@ -949,6 +949,8 @@ jobs:
           var backup_restore: Button
           var backup_close: Button
           var backup_confirmation: String = ""
+          var backup_open_pending: bool = false
+          var backup_open_attempt: Dictionary = {}
           var restore_pending: bool = false
           var recovery_panel: ColorRect
           var recovery_message: Label
@@ -1060,9 +1062,31 @@ jobs:
               backup_panel.add_child(button)
               return button
 
+          func backup_open_feedback(message: String) -> void:
+              city.status_label.text = message
+              city.sync_compact_messages()
+
           func open_backup() -> void:
+              # A periodic save can begin between button-down and pressed.
+              var phase: String = session.status()
+              backup_open_attempt = {"phase": phase, "confirmed": city.profile_confirmed,
+                  "invalid": city.profile_view_invalid, "outcome": "refused"}
+              if not city.profile_confirmed or city.profile_view_invalid or phase not in ["ready", "saving"]:
+                  backup_open_feedback("Backup unavailable · wait for a confirmed save or reload.")
+                  return
+              if phase == "saving":
+                  backup_open_pending = true
+                  backup_open_attempt["outcome"] = "waiting"
+                  backup_open_feedback("Opening backup after the current save is confirmed…")
+                  return
+              show_confirmed_backup()
+
+          func show_confirmed_backup() -> void:
+              # Never suspend the city's acknowledgement path during a write.
               if session.status() != "ready" or not city.profile_confirmed or city.profile_view_invalid:
                   return
+              backup_open_pending = false
+              backup_open_attempt["outcome"] = "opened"
               var focus := get_viewport().gui_get_focus_owner()
               if focus != null:
                   focus.release_focus()
@@ -1160,7 +1184,20 @@ jobs:
               city.process_mode = Node.PROCESS_MODE_INHERIT
 
           func process_backup() -> void:
-              backup_button.disabled = session.status() != "ready" or not city.profile_confirmed or city.profile_view_invalid
+              var phase: String = session.status()
+              if backup_open_pending:
+                  if not city.profile_confirmed or city.profile_view_invalid or phase not in ["ready", "saving"]:
+                      backup_open_pending = false
+                      backup_open_attempt["outcome"] = "failed"
+                      backup_open_feedback("Backup unavailable · save not confirmed. Reload to reconcile.")
+                  elif city.compact_mode and city.compact_page != 6:
+                      backup_open_pending = false
+                      backup_open_attempt["outcome"] = "canceled"
+                      backup_open_feedback("Backup opening canceled.")
+                  elif phase == "ready":
+                      show_confirmed_backup()
+              # Accept a request during a save, but open only after acknowledgement.
+              backup_button.disabled = backup_open_pending or phase not in ["ready", "saving"] or not city.profile_confirmed or city.profile_view_invalid
               if not restore_pending:
                   return
               # Use the existing city acknowledgement path while ordinary city input
@@ -1410,6 +1447,7 @@ jobs:
                   "domain_revision": city.city.revision, "pending_kind": city.profile_pending_kind,
                   "status": city.status_label.text, "footer": city.profile_footer.text,
                   "backup_open": backup_panel.visible, "backup_message": backup_message.text,
+                  "backup_open_pending": backup_open_pending, "backup_open_attempt": backup_open_attempt,
                   "recovery_open": recovery_panel.visible, "recovery_message": recovery_message.text,
                   "recovery_confirm_disabled": recovery_confirm.disabled,
                   "backup_restore_disabled": backup_restore.disabled,
@@ -1703,7 +1741,7 @@ jobs:
                   xx,yy,ww,hh = v["layout_controls"][band]["rect"]
                   assert min(x+w,xx+ww) <= max(x,xx) or min(y+h,yy+hh) <= max(y,yy), (name,band,boxes,v)
               return boxes[name]
-          def compact_click(name):
+          def compact_click(name, confirmed_kind=None):
               g = view()["layout_controls"][name]
               assert g["visible"], (name, g)
               x,y,w,h = g["rect"]
@@ -1712,9 +1750,13 @@ jobs:
               api("POST", session + "/actions", {"actions": [{"type":"pointer","id":"mouse",
                   "parameters":{"pointerType":"mouse"},"actions":[
                       {"type":"pointerMove","duration":50,"origin":"viewport",
-                       "x":round(b["x"]+b["width"]*(x+w/2)/width),"y":round(b["y"]+b["height"]*(y+h/2)/height)},
+                       "x":round(b["x"]+b["width"]*(x+w/2)/width),"y":round(b["y"]+b["height"]*(y+h/2)/height)}]}]})
+              before = wait(lambda: ready(confirmed_kind), "compact confirmed "+confirmed_kind, 15) if confirmed_kind else None
+              api("POST", session + "/actions", {"actions": [{"type":"pointer","id":"mouse",
+                  "parameters":{"pointerType":"mouse"},"actions":[
                       {"type":"pointerDown","button":0},{"type":"pause","duration":80},
                       {"type":"pointerUp","button":0}]}]})
+              return before
           def observe(predicate, label, seconds=35):
               def probe():
                   pair = saved()
@@ -1993,9 +2035,13 @@ jobs:
                           book_rects = compact_geometry(["book_tab","collection","favorite","sale","backup"], ["book_tab","collection","favorite","sale","backup"])
                           compact_book_target("backup")
                       capture("compact-"+tag+"-book")
-                      wait(lambda: ready("backup"), "compact confirmed backup "+tag)
-                      compact_click("backup")
-                      wait(lambda: view()["backup_open"], "compact backup opened "+tag)
+                      before_open = compact_click("backup", "backup")
+                      opened_backup = wait(lambda: (v if (v := view()) and v["backup_open"] else None), "compact backup opened "+tag)
+                      assert opened_backup["presses"]["backup"] == before_open["presses"]["backup"] + 1, opened_backup
+                      assert opened_backup["downs"]["backup"] == before_open["downs"]["backup"] + 1, opened_backup
+                      assert opened_backup["backup_open_attempt"]["outcome"] == "opened" and not opened_backup["backup_open_pending"], opened_backup
+                      assert opened_backup["phase"] == "ready" and opened_backup["confirmed"] and not opened_backup["invalid"], opened_backup
+                      print(json.dumps({"compact_backup_open":tag,"attempt":opened_backup["backup_open_attempt"]}),flush=True)
                       compact_click("export")
                       wait(lambda: view()["backup_message"].startswith("Confirmed backup exported"), "compact export "+tag)
                       before = saved()["active"]
@@ -2059,7 +2105,7 @@ jobs:
                           assert saved()["active"]["model"][k] == restored_model[k], k
                       assert raw_city_pair()["archive"] == restored_compact["archive"]
                       capture("compact-"+tag+"-reloaded")
-                      compact_observations.append({"viewport":[width,height],"book":book_rects,"backup":backup_rects,"recovery":recovery_rects,"preview_preserved":True,"restored":True,"fresh_profile":True,"archive_absent_before_fault":True,"archive_preserved":True,"reopened":True})
+                      compact_observations.append({"viewport":[width,height],"book":book_rects,"backup":backup_rects,"recovery":recovery_rects,"backup_open_attempt":opened_backup["backup_open_attempt"],"preview_preserved":True,"restored":True,"fresh_profile":True,"archive_absent_before_fault":True,"archive_preserved":True,"reopened":True})
                       print(json.dumps({"compact_city_recovery":"pass","viewport":[width,height]}), flush=True)
                   (evidence/"compact-backup-recovery.json").write_text(json.dumps(compact_observations,indent=2))
                   report = {"persistent_city":"pass","browser":opened["capabilities"].get("browserVersion"),

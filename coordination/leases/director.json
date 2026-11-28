@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "director",
-  "generation": 184,
-  "run_id": null,
-  "acquired_at": null,
-  "expires_at": null
+  "generation": 185,
+  "run_id": "mountain-mover-20261128T1453Z-idle-backup-fixture",
+  "acquired_at": "2026-11-28T14:53:20.000Z",
+  "expires_at": "2026-11-28T15:23:20.000Z"
 }

@@ -2434,16 +2434,80 @@ jobs:
                   assert idle_fenced() and view()["domain_revision"] == before_idle["domain_revision"]
                   assert idle_raw_records() == idle_upgraded, "Disabled restore changed durable records"
                   compact_click("close")
-                  idle_closed = wait(lambda: (v if (v := view()) and not v["backup_open"] and v["phase"] == "unavailable"
-                      and all(v["disabled"][k] for k in ("backup","plant","feed","collect","harvest")) else None), "closed modal retains action fence")
-                  assert idle_closed["domain_revision"] == before_idle["domain_revision"]
-                  assert idle_raw_records() == idle_upgraded, "Closing backup changed durable records"
+                  # Terminal overlay is the input fence; raw widget disabled flags describe
+                  # economic eligibility and may legitimately remain false.
+                  def idle_closed_fence():
+                      v = view()
+                      return v if v and not v["backup_open"] and v["phase"] == "unavailable" and v["overlay"] and v["disabled"]["backup"] and "Save unavailable" in v["footer"] else None
+                  idle_closed = wait(idle_closed_fence, "closed modal retains terminal overlay")
+                  idle_kinds = ("feed", "plant", "collect", "harvest")
+                  def idle_assert_fence(label):
+                      v = idle_closed_fence()
+                      assert v, (label, "terminal overlay lost", view())
+                      assert v["domain_revision"] == before_idle["domain_revision"], (label, "visible revision changed")
+                      assert not v["pending_kind"], (label, "economic action pending")
+                      for counter in ("downs", "presses"):
+                          assert all(v[counter][k] == before_idle[counter][k] for k in idle_kinds), (label, counter, v[counter], before_idle[counter])
+                      assert idle_raw_records() == idle_upgraded, (label, "durable active/previous/archive changed")
+                      return v
+                  idle_assert_fence("close")
                   capture("idle-backup-closed")
+                  # Use browser-delivered W3C input, not JS-dispatched events or game commands.
+                  # Audit real events at capture phase; a no-op test driver must not pass.
+                  assert js("""
+                      window.arch002IdleInput = [];
+                      for (const type of ["pointerdown", "keydown"]) window.addEventListener(type, e => {
+                          window.arch002IdleInput.push({type, trusted:e.isTrusted,
+                              canvas:e.target===document.querySelector("canvas"),
+                              key:e.key??null, x:e.clientX??null, y:e.clientY??null});
+                      }, true);
+                      return true;
+                  """)
+                  import re as idle_re
+                  idle_attempts = []
+                  for kind in ("feed", "plant"):
+                      v = idle_assert_fence(kind + " before")
+                      # Parse the exact diagnostic Rect2 format; fail closed on missing geometry.
+                      m = idle_re.fullmatch(r"\[P: \(([-0-9.]+), ([-0-9.]+)\), S: \(([-0-9.]+), ([-0-9.]+)\)\]", v["rects"][kind])
+                      assert m, (kind, v["rects"][kind])
+                      x,y,w,h = map(float,m.groups())
+                      vw,vh = v["viewport_size"]
+                      assert w>0 and h>0 and 0<=x<x+w<=vw and 0<=y<y+h<=vh, (kind, x,y,w,h,vw,vh)
+                      b = bounds()
+                      assert b and b["width"]>0 and b["height"]>0
+                      expected_x = b["x"] + b["width"]*(x+w/2)/vw
+                      expected_y = b["y"] + b["height"]*(y+h/2)/vh
+                      n = len(js("return window.arch002IdleInput;"))
+                      # modal_click uses normalized desktop coordinates and does not wait for readiness.
+                      modal_click((x+w/2)*1100/vw, (y+h/2)*880/vh)
+                      time.sleep(.25)
+                      events = js("return window.arch002IdleInput;")[n:]
+                      assert any(e["type"]=="pointerdown" and e["trusted"] and e["canvas"] and abs(e["x"]-expected_x)<=2 and abs(e["y"]-expected_y)<=2 for e in events), (kind, "pointer did not reach intended canvas point", events)
+                      idle_assert_fence(kind + " pointer")
+                      n = len(js("return window.arch002IdleInput;"))
+                      key_press("\uE007")  # Enter
+                      key_press("\uE00D")  # Space
+                      time.sleep(.25)
+                      events = js("return window.arch002IdleInput;")[n:]
+                      assert all(any(e["type"]=="keydown" and e["trusted"] and e["canvas"] and e["key"]==key for e in events) for key in ("Enter", " ")), (kind, "keyboard delivery not demonstrated", events)
+                      idle_assert_fence(kind + " keyboard")
+                      # Browser-handled Tab may leave canvas; record rather than mislabel focus.
+                      n = len(js("return window.arch002IdleInput;"))
+                      key_press("\uE004")  # Tab
+                      key_press("\uE007")
+                      key_press("\uE00D")
+                      time.sleep(.25)
+                      traversal = js("return window.arch002IdleInput;")[n:]
+                      idle_assert_fence(kind + " focus traversal")
+                      idle_attempts.append({"kind":kind,"target_css":[expected_x,expected_y],"pointer_delivered":True,
+                          "enter_space_delivered_to_canvas":True,"focus_traversal_events":traversal})
+                  idle_assert_fence("final")
+                  capture("idle-backup-fence-inputs")
                   idle_report = {"idle_backup_invalidation":"pass","fresh_disposable_profile":True,
                       "real_indexeddb_upgrade":[1,2],"preview_armed_before_fault":True,
-                      "visible_unavailable":True,"restore_disabled":True,"city_actions_disabled_after_close":True,
-                      "confirmed_revision_unchanged":True,"exact_active_previous_archive_preserved":True,
-                      "actual_site_verified":False}
+                      "visible_unavailable":True,"restore_disabled":True,"city_action_fence_after_close":True,
+                      "input_attempts":idle_attempts,"confirmed_revision_unchanged":True,
+                      "exact_active_previous_archive_preserved":True,"actual_site_verified":False}
                   (evidence/"idle-backup-invalidation.json").write_text(json.dumps(idle_report,indent=2))
                   print(json.dumps(idle_report), flush=True)
           except Exception as error:

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "qa",
-  "run_id": "qa-20261128T1439Z-idle-health-g110",
+  "run_id": null,
   "generation": 110,
-  "acquired_at": "2026-11-28T14:39:00.020Z",
-  "expires_at": "2026-11-28T15:09:00.020Z"
+  "acquired_at": null,
+  "expires_at": null
 }

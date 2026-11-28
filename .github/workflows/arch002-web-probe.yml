@@ -1485,6 +1485,35 @@ jobs:
                   return False
           def js(source):
               return api("POST", session + "/execute/sync", {"script": source, "args": []})
+          def clipboard_call(script, args=()):
+              result = api("POST", session + "/execute/async", {"args": list(args), "script": script + """
+                const done = arguments[arguments.length - 1];
+                operation.then(value => done({ok:true,value}), error => done({ok:false,error:String(error)}));
+              """})
+              assert result["ok"], "Browser clipboard API failed: " + result.get("error", "")
+              return result.get("value")
+          def clipboard_read():
+              return clipboard_call("const operation = navigator.clipboard.readText();")
+          def clipboard_write(text):
+              clipboard_call("const operation = navigator.clipboard.writeText(arguments[0]);", (text,))
+          def key_press(key, control=False):
+              keys = ([{"type":"keyDown","value":"\uE009"}] if control else [])
+              keys += [{"type":"keyDown","value":key},{"type":"pause","duration":100},{"type":"keyUp","value":key}]
+              if control:
+                  keys += [{"type":"keyUp","value":"\uE009"}]
+              api("POST", session + "/actions", {"actions":[{"type":"key","id":"backup-keyboard","actions":keys}]})
+          def copy_backup(sentinel):
+              # Seed only a sentinel, never the expected backup; the game must
+              # populate the actual browser clipboard via user keyboard input.
+              clipboard_write(sentinel)
+              assert clipboard_read() == sentinel, "Clipboard sentinel did not round-trip"
+              compact_click("input")
+              key_press("a", control=True)
+              key_press("c", control=True)
+              def copied():
+                  value = clipboard_read()
+                  return value if value and value != sentinel else None
+              return wait(copied, "Godot copied full backup into browser clipboard", 15)
           def saved():
               result = api("POST", session + "/execute/async", {"args": [], "script": """
                 const done = arguments[arguments.length - 1];
@@ -2007,10 +2036,39 @@ jobs:
                   wait(lambda: view()["backup_message"].startswith("Confirmed backup exported"), "large export to text")
                   large_times["export_seconds"] = time.monotonic()-started
                   before_large_restore = saved()["active"]
+                  # Exercise a real portable exchange, not just previewing
+                  # the same TextEdit buffer populated by Export. Grant only
+                  # disposable CI origin clipboard permissions, no game API bypass.
+                  api("POST", session + "/goog/cdp/execute", {"cmd":"Browser.grantPermissions",
+                      "params":{"origin":url.split("/index.html",1)[0],
+                          "permissions":["clipboardReadWrite","clipboardSanitizedWrite"]}})
+                  clipboard_started = time.monotonic()
+                  copied_backup = copy_backup("LR-CI-sentinel-before-copy")
+                  decoded_backup = json.loads(copied_backup)
+                  assert decoded_backup == {"format":"little-ray-city-backup","version":1,
+                      "wall_marker_ms":before_large_restore["wall_marker_ms"],"model":before_large_restore["model"]}, "Exported clipboard model differs from confirmed profile"
+                  assert len(copied_backup.encode("utf-8")) > 1048576, "Clipboard payload truncated"
+                  compact_click("input")
+                  key_press("a", control=True)
+                  key_press("\uE003")
+                  modal_click(430, 705)
+                  wait(lambda: view()["backup_message"] == "Backup empty or too large." and view()["backup_restore_disabled"], "cleared editor rejects preview")
+                  assert saved()["active"] == before_large_restore, "Clearing editor mutated save"
+                  assert clipboard_read() == copied_backup, "Clear/preview changed clipboard"
+                  compact_click("input")
+                  key_press("v", control=True)
+                  large_times["clipboard_copy_clear_paste_seconds"] = time.monotonic()-clipboard_started
                   started = time.monotonic()
                   modal_click(430, 705)
                   wait(lambda: not view()["backup_restore_disabled"] and view()["backup_message"].startswith("Replace current city"), "large preview")
                   large_times["preview_seconds"] = time.monotonic()-started
+                  # A second real copy with a distinct sentinel proves paste
+                  # preserved every character, rather than just valid JSON.
+                  pasted_backup = copy_backup("LR-CI-sentinel-after-paste")
+                  assert pasted_backup == copied_backup, "Pasted backup differs from exported clipboard text"
+                  assert not view()["backup_restore_disabled"], "Read-only copy invalidated preview"
+                  import hashlib
+                  clipboard_digest = hashlib.sha256(copied_backup.encode("utf-8")).hexdigest()
                   assert saved()["active"] == before_large_restore
                   started = time.monotonic()
                   modal_click(660, 705)
@@ -2051,6 +2109,9 @@ jobs:
                   capture("large-recovery-reloaded")
                   large_report = {"large_city_browser":"pass","seed_bytes":seed_bytes,"receipts":13000,
                       "seeded_native_fixture":True,"preview_preserved":True,"restored":True,
+                      "clipboard_roundtrip":{"method":"Chromium WebDriver keyboard + browser clipboard readback",
+                          "cleared_preview_rejected":True,"exact_text_equal":True,
+                          "bytes":len(copied_backup.encode("utf-8")),"sha256":clipboard_digest},
                       "archive_preserved":True,"reopened":True,"elapsed_seconds":large_times,
                       "actual_site_verified":False}
                   (evidence/"large-city-browser.json").write_text(json.dumps(large_report,indent=2))

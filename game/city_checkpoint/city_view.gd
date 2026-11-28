@@ -8,7 +8,7 @@ const MAP_ORIGIN := Vector2(370, 222)
 const OPENING_MAP_ZOOM: float = 0.94
 const EXPANDED_MAP_ZOOM: float = 0.72
 const GOLD_MARKER_OFFSET := Vector2(41, -33)
-const GOLD_MARKER_RADIUS: float = 14.0
+const GOLD_MARKER_SIZE: float = 44.0
 # Native design units; the served CSS transform must be verified separately.
 const MIN_CONTROL_TARGET: float = 44.0
 var city = Model.new()
@@ -87,6 +87,7 @@ var compact_page: int = 0
 var compact_nav: Array[Button] = []
 var desktop_controls: Dictionary = {}
 var compact_map_transform := Transform2D.IDENTITY
+var compact_map_hint_rect := Rect2()
 var compact_status: RichTextLabel
 var compact_save: RichTextLabel
 var compact_scroll: ScrollContainer
@@ -444,8 +445,13 @@ func apply_city_layout() -> void:
 				next_y = compact_grid([map_mode_button, cancel_preview_button], 8, next_y, w, 2)
 				compact_label(land_label, 8, next_y, w, 26)
 				area = Rect2(8, next_y + 28.0, w, maxf(1.0, bottom - next_y - 28.0))
-			# Only the map projection scales. The controls remain in viewport units.
-			var source := Rect2(18, 198, 716, 367)
+			# Reserve a screen-space hint; never shrink the required action labels.
+			compact_map_hint_rect = Rect2()
+			if area.size.y >= 40.0:
+				compact_map_hint_rect = Rect2(area.position.x, area.end.y - 20.0, area.size.x, 20.0)
+				area.size.y -= 20.0
+			# Only the map projection scales. Gold targets are drawn in view units.
+			var source := MAP_INPUT_RECT
 			var ratio: float = minf(area.size.x / source.size.x, area.size.y / source.size.y)
 			var origin: Vector2 = area.position + (area.size - source.size * ratio) * 0.5 - source.position * ratio
 			compact_map_transform = Transform2D(Vector2(ratio, 0), Vector2(0, ratio), origin)
@@ -735,25 +741,49 @@ func preview_point(point: Vector2) -> bool:
 	status_label.text = ("Preview cell (%d,%d) · confirm in Build tab." if compact_mode else "Preview cell (%d,%d) · confirm or cancel below.") % [cell.x, cell.y]
 	return true
 
-# Gold markers live in screen space, not inside the inverse-projected tile.
+# The anchor remains in map coordinates; the actual labeled target is in
+# unscaled view coordinates. Draw and hit-test the same rectangles.
 func gold_marker_center(b: Dictionary) -> Vector2:
 	var half: float = float(b["size"]) * 0.5
 	return iso(float(b["x"]) + half, float(b["y"]) + half) + GOLD_MARKER_OFFSET
 
-func gold_marker_at(point: Vector2) -> String:
-	if not MAP_INPUT_RECT.has_point(point):
-		return ""
-	var target: String = ""
-	var nearest: float = GOLD_MARKER_RADIUS * GOLD_MARKER_RADIUS
+func gold_marker_targets() -> Dictionary:
+	var bounds: Rect2 = compact_map_transform * MAP_INPUT_RECT if compact_mode else MAP_INPUT_RECT
+	var candidates: Dictionary = {}
+	if minf(bounds.size.x, bounds.size.y) < GOLD_MARKER_SIZE:
+		return candidates
+	var half: float = GOLD_MARKER_SIZE * 0.5
 	for id in city.habitat_ids():
 		if city.stored_gold(id) <= 0:
 			continue
-		var distance: float = point.distance_squared_to(gold_marker_center(city.find_building(id)))
-		# Nearest visible marker wins; ties follow the last drawn marker.
-		if distance <= nearest:
-			nearest = distance
-			target = id
-	return target
+		var center: Vector2 = gold_marker_center(city.find_building(id))
+		if compact_mode:
+			center = compact_map_transform * center
+			center = Vector2(clampf(center.x, bounds.position.x + half, bounds.end.x - half), clampf(center.y, bounds.position.y + half, bounds.end.y - half))
+		var rect := Rect2(center - Vector2(half, half), Vector2(GOLD_MARKER_SIZE, GOLD_MARKER_SIZE))
+		if bounds.encloses(rect):
+			candidates[id] = rect
+	# Never give a crowded marker an ambiguous hit target. The Home panel
+	# still offers an individually labeled habitat selector and collection.
+	var targets: Dictionary = {}
+	for id in candidates:
+		var rect: Rect2 = candidates[id]
+		var clear: bool = true
+		for other in candidates:
+			if other != id and rect.intersects(candidates[other]):
+				clear = false
+		if clear:
+			targets[id] = rect
+	return targets
+
+func gold_marker_at(point: Vector2) -> String:
+	var view_point: Vector2 = compact_map_transform * point if compact_mode else point
+	var targets := gold_marker_targets()
+	for id in targets:
+		var rect: Rect2 = targets[id]
+		if rect.has_point(view_point):
+			return str(id)
+	return ""
 
 func tend_habitat(id: String) -> void:
 	for i in range(habitat_choice.item_count):
@@ -812,6 +842,13 @@ func _gui_input(event: InputEvent) -> void:
 		tend_habitat(marker_id)
 		return
 	if not map_point_is_usable(point):
+		return
+	# At tiny projections, a farm's two-cell vertical footprint is too
+	# small for reliable direct tending. Keep preview/confirm available,
+	# but route ambiguous resource taps to the labeled destination panels.
+	if compact_mode and absf((compact_map_transform * iso(2, 2)).y - (compact_map_transform * iso(0, 0)).y) < MIN_CONTROL_TARGET:
+		accept_event()
+		status_label.text = "Small map: use Home for Gold or Farm for crops."
 		return
 	var cell := map_cell(point)
 	accept_event()
@@ -1156,7 +1193,7 @@ func _draw() -> void:
 		if compact_page != 0:
 			return
 		draw_set_transform_matrix(compact_map_transform)
-		draw_rect(Rect2(18, 198, 716, 367), Color("#12617a"))
+		draw_rect(MAP_INPUT_RECT, Color("#12617a"))
 	else:
 		draw_rect(Rect2(18, 109, 716, 456), Color("#12617a"))
 		draw_circle(Vector2(370, 345), 220, Color("#197d8c"))
@@ -1199,13 +1236,21 @@ func _draw() -> void:
 			var valid: bool = city.can_place(x, y, footprint, selection[1] if selection[0] == "move" else "")
 			var points := PackedVector2Array([iso(x,y),iso(x+footprint,y),iso(x+footprint,y+footprint),iso(x,y+footprint),iso(x,y)])
 			draw_polyline(points, Color("#f3ffe0") if valid else Color("#ffac75"), 3.0, true)
-	# Draw collection markers last so a neighboring building cannot hide a live hit target.
-	for id in city.habitat_ids():
-		if city.stored_gold(id) > 0:
-			var marker := gold_marker_center(city.find_building(id))
-			draw_circle(marker, GOLD_MARKER_RADIUS, Color("#ffce63"))
-			ink("G", marker + Vector2(-6, 5), 14, Color("#533e26"))
-	ink("Tap a building to tend · map placement mode previews only" if not map_place_mode else "Tap or drag · white = free / orange = blocked · confirm / cancel", Vector2(37, 542), 15)
+	# Draw and hit-test the same unscaled rectangles, above building geometry.
+	draw_set_transform_matrix(Transform2D.IDENTITY)
+	if not map_place_mode:
+		var targets := gold_marker_targets()
+		for id in targets:
+			var rect: Rect2 = targets[id]
+			draw_rect(rect, Color("#ffce63"))
+			draw_rect(rect, Color("#533e26"), false, 1.0)
+			ink("Gold", rect.get_center() + Vector2(-16, 5), 14, Color("#533e26"))
+	if compact_mode:
+		if compact_map_hint_rect.size.y >= 20.0:
+			var hint: String = "Preview · confirm in Build" if map_place_mode else "Gold: Home · crops: Farm"
+			ink(hint, compact_map_hint_rect.position + Vector2(2, 15), 14)
+	else:
+		ink("Tap a building to tend · map placement mode previews only" if not map_place_mode else "Tap or drag · white = free / orange = blocked · confirm / cancel", Vector2(37, 542), 15)
 
 func draw_building(b: Dictionary) -> void:
 	var x: float = float(b["x"])
@@ -1774,6 +1819,25 @@ func short_city_layout_fixture() -> bool:
 			[view.collection_button, view.favorite_button, view.sell_button]]
 		var bounds := Rect2(view.global_position, dimensions)
 		var good: bool = true
+		# Advance only this explicitly synthetic fixture to produce a Gold bin.
+		view.city.advance(60000)
+		view.refresh()
+		await get_tree().process_frame
+		var markers: Dictionary = view.gold_marker_targets()
+		if not markers.has("tide-1"):
+			push_error("Short map starter Gold target unavailable: " + str(dimensions))
+			view.free()
+			return false
+		var marker: Rect2 = markers["tide-1"]
+		var mapped_bounds: Rect2 = view.compact_map_transform * MAP_INPUT_RECT
+		good = good and marker.size == Vector2(44, 44) and mapped_bounds.encloses(marker)
+		good = good and not marker.intersects(view.compact_map_hint_rect)
+		var initial_gold: int = view.city.gold
+		var initial_revision: int = view.city.revision
+		await click_point_fixture(view.global_position + marker.get_center())
+		good = good and view.city.gold > initial_gold and view.city.revision == initial_revision + 1
+		good = good and view.city.stored_gold("tide-1") == 0
+		print("CITY_SHORT_MAP_TARGET: %s %s direct Gold click %s" % [dimensions, marker, good])
 		for page in range(pages.size()):
 			view.choose_compact_page(page)
 			await get_tree().process_frame

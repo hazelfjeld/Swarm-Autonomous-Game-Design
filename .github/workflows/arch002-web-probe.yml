@@ -992,6 +992,9 @@ jobs:
               backup_button.disabled = true
               backup_button.pressed.connect(open_backup)
               city.add_child(backup_button)
+              # The city rebuilds its layout even when Book is tapped twice.
+              city.compact_nav[6].pressed.connect(invalidate_integration_layout)
+              city.resized.connect(invalidate_integration_layout)
 
               var layer := CanvasLayer.new()
               add_child(layer)
@@ -1237,6 +1240,29 @@ jobs:
                   control.size_flags_vertical = Control.SIZE_FILL
               backup_body.visible = compact
 
+          func invalidate_integration_layout() -> void:
+              integration_layout_key = ""
+
+          # Use the pinned city's existing overflow container, not a city-root
+          # coordinate derived from a control that may already be reparented.
+          func layout_book_backup(w: float) -> void:
+              var sale: Rect2 = city.sell_button.get_rect()
+              var parent: Node = city.sell_button.get_parent()
+              if backup_button.get_parent() != parent:
+                  backup_button.reparent(parent, false)
+              var x: float = sale.end.x + 8.0 if w >= 580.0 else sale.position.x
+              var y: float = sale.position.y if w >= 580.0 else sale.position.y + 56.0
+              city.compact_place(backup_button, x, y, sale.size.x, 48.0)
+              if parent == city.compact_scroll_content:
+                  var minimum: Vector2 = city.compact_scroll_content.custom_minimum_size
+                  minimum.y = maxf(minimum.y, ceilf(backup_button.get_rect().end.y) + 4.0)
+                  city.compact_scroll_content.custom_minimum_size = minimum
+              else:
+                  var top: float = city.goal_label.position.y + 40.0
+                  var bottom: float = city.compact_status.position.y - 6.0
+                  city.fit_compact_actions([city.collection_info, city.sale_note, city.collection_button,
+                      city.favorite_button, city.sell_button, backup_button], Rect2(8, top, w, bottom - top))
+
           func layout_integration_ui() -> void:
               var viewport: Vector2 = city.size
               var compact: bool = city.compact_mode
@@ -1279,13 +1305,7 @@ jobs:
               backup_button.clip_text = true
               backup_button.visible = city.compact_page == 6
               if backup_button.visible:
-                  # Book contains Collection, Favorite, Sale. Add the fourth
-                  # action in its unused grid slot (or the next portrait row).
-                  var sale: Rect2 = city.sell_button.get_rect()
-                  if w >= 580.0:
-                      place_control(backup_button, sale.end.x + 8.0, sale.position.y, sale.size.x, 48)
-                  else:
-                      place_control(backup_button, sale.position.x, sale.position.y + 56.0, sale.size.x, 48)
+                  layout_book_backup(w)
               backup_heading.text = "City backup / restore"
               backup_heading.add_theme_font_size_override("font_size", 20)
               place_control(backup_heading, 8, 8, w, 28)
@@ -1401,9 +1421,14 @@ jobs:
                   "rects": {"plant": str(city.plant_short.get_global_rect()), "feed": str(city.feed_button.get_global_rect()), "collect": str(city.collect_button.get_global_rect()), "harvest": str(city.harvest_button.get_global_rect())},
                   "viewport": str(city.get_viewport_rect().size),
                   "viewport_size": [city.size.x, city.size.y], "compact_page": city.compact_page,
+                  "book_scroll_offset": city.compact_scroll.scroll_vertical,
+                  "backup_scroll_offset": backup_body.scroll_vertical,
                   "layout_controls": {"book_tab": control_geometry(city.compact_nav[6]),
                       "collection": control_geometry(city.collection_button), "favorite": control_geometry(city.favorite_button),
                       "sale": control_geometry(city.sell_button), "backup": control_geometry(backup_button),
+                      "book_scroll": control_geometry(city.compact_scroll),
+                      "status_band": control_geometry(city.compact_status), "save_band": control_geometry(city.compact_save),
+                      "backup_body": control_geometry(backup_body), "map_tab": control_geometry(city.compact_nav[0]),
                       "backup_heading": control_geometry(backup_heading), "help": control_geometry(backup_help),
                       "input": control_geometry(backup_text), "message": control_geometry(backup_message),
                       "export": control_geometry(backup_export), "preview": control_geometry(backup_preview),
@@ -1639,6 +1664,45 @@ jobs:
                   for n, (xx,yy,ww,hh) in list(boxes.items())[index+1:]:
                       assert min(x+w,xx+ww) <= max(x,xx) or min(y+h,yy+hh) <= max(y,yy), (a,n,boxes)
               return boxes
+          def encloses(outer, inner):
+              x,y,w,h = outer
+              xx,yy,ww,hh = inner
+              return xx >= x-.01 and yy >= y-.01 and xx+ww <= x+w+.01 and yy+hh <= y+h+.01
+          def compact_reveal(name, pane, offset_key):
+              # Real browser wheel; never write an engine scroll offset.
+              for attempt in range(32):
+                  v = view()
+                  target, clip = (v["layout_controls"][k] for k in (name,pane))
+                  assert target["visible"] and clip["visible"], (name, target, clip)
+                  if encloses(clip["rect"], target["rect"]):
+                      return v
+                  x,y,w,h = clip["rect"]
+                  tx,ty,tw,th = target["rect"]
+                  assert th <= h+.01, (name, target, clip)
+                  delta = 64 if ty+th > y+h else -64
+                  b = bounds()
+                  vw,vh = v["viewport_size"]
+                  # Move first so Godot's cached hover reflects the wheel point.
+                  px = round(b["x"]+b["width"]*(x+(w/2 if pane=="book_scroll" else w-12))/vw)
+                  py = round(b["y"]+b["height"]*(y+h/2)/vh)
+                  api("POST", session+"/actions", {"actions":[{"type":"pointer","id":"mouse","parameters":{"pointerType":"mouse"},"actions":[
+                      {"type":"pointerMove","duration":80,"origin":"viewport","x":px,"y":py}]}]})
+                  time.sleep(.25)
+                  offset = view()[offset_key]
+                  api("POST", session+"/actions", {"actions":[{"type":"wheel","id":"wheel","actions":[
+                      {"type":"scroll","duration":80,"origin":"viewport","x":px,"y":py,"deltaX":0,"deltaY":delta}]}]})
+                  wait(lambda: (v if (v := view()) and v[offset_key] != offset else None), "scroll "+name, 5)
+              raise AssertionError(("unreachable control",name,view()))
+          def compact_book_target(name):
+              v = view()
+              if v["layout_controls"]["book_scroll"]["visible"]:
+                  v = compact_reveal(name,"book_scroll","book_scroll_offset")
+              boxes = compact_geometry(["book_tab",name],["book_tab",name])
+              x,y,w,h = boxes[name]
+              for band in ("status_band","save_band"):
+                  xx,yy,ww,hh = v["layout_controls"][band]["rect"]
+                  assert min(x+w,xx+ww) <= max(x,xx) or min(y+h,yy+hh) <= max(y,yy), (name,band,boxes,v)
+              return boxes[name]
           def compact_click(name):
               g = view()["layout_controls"][name]
               assert g["visible"], (name, g)
@@ -1890,7 +1954,7 @@ jobs:
                   # below creates its valid active/previous pair. Do not clear
                   # the desktop archive or reset a real player's storage.
                   compact_observations = []
-                  for width, height in ((390,844),(844,390)):
+                  for width, height in ((390,844),(844,390),(568,320),(320,480)):
                       tag = f"{width}x{height}"
                       api("DELETE", session)
                       session = None
@@ -1911,7 +1975,23 @@ jobs:
                       compact_geometry(["book_tab"], ["book_tab"])
                       compact_click("book_tab")
                       wait(lambda: view()["compact_page"] == 6 and view()["layout_controls"]["backup"]["visible"], "compact Book "+tag)
-                      book_rects = compact_geometry(["book_tab","collection","favorite","sale","backup"], ["book_tab","collection","favorite","sale","backup"])
+                      short = height <= 480 and width <= 568
+                      if short:
+                          assert view()["layout_controls"]["book_scroll"]["visible"], view()
+                          book_rects = {name:compact_book_target(name) for name in ("collection","favorite","sale","backup")}
+                          capture("compact-"+tag+"-book-scrolled")
+                          # Reselect Book: city's layout rebuild must not orphan Backup.
+                          compact_click("book_tab")
+                          wait(lambda: view()["compact_page"] == 6 and view()["layout_controls"]["book_scroll"]["visible"], "Book reselected "+tag)
+                          compact_book_target("backup")
+                          compact_click("map_tab")
+                          wait(lambda: view()["compact_page"] == 0 and not view()["layout_controls"]["backup"]["visible"], "backup hidden outside Book "+tag)
+                          compact_click("book_tab")
+                          wait(lambda: view()["compact_page"] == 6 and view()["layout_controls"]["backup"]["visible"], "Book returned "+tag)
+                          compact_book_target("backup")
+                      else:
+                          book_rects = compact_geometry(["book_tab","collection","favorite","sale","backup"], ["book_tab","collection","favorite","sale","backup"])
+                          compact_book_target("backup")
                       capture("compact-"+tag+"-book")
                       wait(lambda: ready("backup"), "compact confirmed backup "+tag)
                       compact_click("backup")
@@ -1925,8 +2005,17 @@ jobs:
                       # Container layout can settle after the text-change frame.
                       # Require the original fully-visible/non-overlap conditions,
                       # not just the successful preview response.
-                      wait(lambda: (v if (v := view()) and v["backup_help_bounds_ok"] and v["backup_message_bounds_ok"] else None), "compact wrapped backup layout "+tag)
-                      backup_rects = compact_geometry(["backup_heading","help","input","message","export","preview","restore","close"], ["export","preview","restore","close"])
+                      if short:
+                          # A deliberately scrolling body need not show all three
+                          # children at once. Require actual reachability and keep
+                          # the fixed action row fully visible/nonoverlapping.
+                          backup_rects = compact_geometry(["backup_heading","backup_body","export","preview","restore","close"], ["export","preview","restore","close"])
+                          for name in ("help","input","message"):
+                              compact_reveal(name,"backup_body","backup_scroll_offset")
+                              backup_rects[name] = compact_geometry([name])[name]
+                      else:
+                          wait(lambda: (v if (v := view()) and v["backup_help_bounds_ok"] and v["backup_message_bounds_ok"] else None), "compact wrapped backup layout "+tag)
+                          backup_rects = compact_geometry(["backup_heading","help","input","message","export","preview","restore","close"], ["export","preview","restore","close"])
                       capture("compact-"+tag+"-preview")
                       compact_click("restore")
                       wait(lambda: view()["backup_message"] == "Backup restored." and view()["phase"] == "ready", "compact replacement "+tag)

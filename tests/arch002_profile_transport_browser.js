@@ -369,6 +369,110 @@ globalThis.__arch002TransportProgress = {passed: 0, last_passed: null};
     recoveryDb.close();
     // Faulted secondRecovery intentionally holds its writer until page teardown.
 
+    // An actual IndexedDB version upgrade fences the owner after an
+    // asynchronous mailbox reply has queued but before Godot consumes it.
+    // Unique disposable databases only; never touch the playable profile.
+    const waitQueued = async predicate => {
+      const deadline = performance.now() + 6000;
+      while (!predicate()) {
+        if (performance.now() >= deadline) throw new Error("queued mailbox fixture timed out");
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      // Drain the port's promise continuation without consuming the result.
+      await new Promise(resolve => setTimeout(resolve, 0));
+    };
+    const versionedDb = (fixtureName, version) => new Promise((resolve, reject) => {
+      const request = indexedDB.open(fixtureName, version);
+      request.onupgradeneeded = event => {
+        if (event.oldVersion === 0) request.result.createObjectStore("profiles");
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error("versionchange fixture blocked"));
+    });
+    const rawRecords = database => new Promise((resolve, reject) => {
+      const tx = database.transaction("profiles", "readonly");
+      const s = tx.objectStore("profiles");
+      const requests = ["active", "previous", "recovery-original"].map(key => s.get(key));
+      tx.oncomplete = () => resolve(requests.map(q => q.result));
+      tx.onerror = tx.onabort = reject;
+    });
+    for (const mode of ["missing", "ready", "write", "preview", "recovery"]) {
+      const fixtureName = name + "-queued-" + mode;
+      const recoveringMode = mode === "preview" || mode === "recovery";
+      if (mode === "ready" || recoveringMode) {
+        const seed = await versionedDb(fixtureName, 1);
+        try {
+          await new Promise((resolve, reject) => {
+            const tx = seed.transaction("profiles", "readwrite");
+            const s = tx.objectStore("profiles");
+            s.put(recoveringMode ? "unreadable" : a, "active");
+            if (recoveringMode) s.put(a, "previous");
+            tx.oncomplete = resolve;
+            tx.onerror = tx.onabort = reject;
+          });
+        } finally { seed.close(); }
+      }
+      let owner, operation;
+      const port = createPort(async () => {
+        owner = await openSession(fixtureName);
+        // Observe completion of the real operations, without modifying their
+        // result or consuming the mailbox. The port awaits the same promise.
+        for (const method of ["commit", "recoverPrevious"]) {
+          const original = owner[method].bind(owner);
+          owner[method] = (...args) => {
+            operation = original(...args);
+            return operation;
+          };
+        }
+        return owner;
+      });
+      if (!port.begin_open()) throw new Error("queued fixture open rejected");
+      await waitQueued(() => !!owner);
+      const isOperation = mode === "write" || mode === "recovery";
+      if (isOperation) {
+        const initial = await awaitMessage(port);
+        const queued = mode === "write"
+          ? initial.ok && port.begin_write(a)
+          : initial.status === "recovery-required" && port.begin_recovery(a, 200);
+        if (!queued) throw new Error("queued fixture operation rejected: " + mode);
+        await waitQueued(() => !!operation);
+        const result = await operation;
+        if (!result.ok) throw new Error("queued fixture operation failed: " + mode);
+        await waitQueued(() => owner.status === (mode === "recovery" ? "recovered" : "ready"));
+      }
+      const expectedStatus = mode === "recovery" ? "recovered" :
+        mode === "preview" ? "recovery-required" : "ready";
+      check(owner.status === expectedStatus, "queued " + mode + " session initially valid");
+      // Opening version 2 invokes the real session onversionchange handler,
+      // which closes its connection. Success confirms the upgrade completed.
+      const upgraded = await versionedDb(fixtureName, 2);
+      try {
+        check(owner.status === "unavailable", "versionchange fences queued " + mode);
+        const reply = JSON.parse(port.take_result());
+        const expectedKind = mode === "recovery" ? "recovery" : mode === "write" ? "write" : "open";
+        check(reply.kind === expectedKind && reply.ok === false &&
+          reply.status === "unavailable" && Object.keys(reply).length === 3 &&
+          port.take_result() === "" && !port.begin_write(b) &&
+          !port.begin_recovery(a, 200) && !(await port.close()),
+          "invalidated queued " + mode + " reply fails closed exactly once");
+        const [active, previous, archive] = await rawRecords(upgraded);
+        const expectedActive = mode === "recovery" ? payload(2, 240, 200) :
+          mode === "preview" ? "unreadable" : mode === "missing" ? undefined : a;
+        const expectedPrevious = recoveringMode ? a : undefined;
+        const expectedArchive = mode === "recovery" ? JSON.stringify({
+          version: 1, activePresent: true, previousPresent: true,
+          active: "unreadable", previous: a
+        }) : undefined;
+        check(active === expectedActive && previous === expectedPrevious && archive === expectedArchive,
+          "queued " + mode + " invalidation preserves exact durable records");
+        const followerDenied = await navigator.locks.request("little-ray-profile:" + fixtureName,
+          {mode: "exclusive", ifAvailable: true}, lock => !lock);
+        check(followerDenied, "invalidated queued " + mode + " retains writer fence");
+      } finally { upgraded.close(); }
+      // The fenced session deliberately retains its writer until page teardown.
+    }
+
     return {profile_transport: "pass", checks, actual_site_verified: false};
   } finally {
     other.close();

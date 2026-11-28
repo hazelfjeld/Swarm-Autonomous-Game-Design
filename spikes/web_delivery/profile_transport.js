@@ -431,6 +431,12 @@ export function createGodotProfilePort(openSession) {
     },
     take_result() {
       if (state !== "result") return "";
+      // A versionchange can fence the writer after its reply is queued.
+      // Do not publish healthy/recovery state from an invalidated session.
+      if (["ready", "recovery-required", "recovered"].includes(nextState) &&
+          session?.status !== nextState) {
+        fail(JSON.parse(message).kind);
+      }
       const value = message;
       message = "";
       state = nextState;

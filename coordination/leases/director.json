@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "director",
-  "generation": 176,
-  "run_id": null,
-  "acquired_at": null,
-  "expires_at": null
+  "generation": 177,
+  "run_id": "director-mountain-mover-20261128T1045Z-mailbox-invalidation",
+  "acquired_at": "2026-11-28T10:45:33Z",
+  "expires_at": "2026-11-28T11:15:33Z"
 }

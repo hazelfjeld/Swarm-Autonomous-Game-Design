@@ -1,0 +1,2555 @@
+name: ARCH-002 exact-head Godot web probe
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'spikes/web_delivery/**'
+      - 'tests/arch002_city_bridge.gd'
+      - 'tests/arch002_city_session_test.gd'
+      - 'integration/arch002/**'
+      - 'tests/arch002_profile_transport_browser.js'
+      - '.github/workflows/arch002-web-probe.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arch002-web-probe
+  cancel-in-progress: true
+
+jobs:
+  web-probe:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'swarm/architect/ARCH-002'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact submitted commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify checkout and Python version
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
+      - name: Obtain verified official editor and templates
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          mkdir arch002-engine arch002-templates
+          base=https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable
+          curl --fail --location --retry 2 --connect-timeout 20 --max-time 420 "$base/Godot_v4.7.2-stable_linux.x86_64.zip" -o editor.zip
+          curl --fail --location --retry 2 --connect-timeout 20 --max-time 600 "$base/Godot_v4.7.2-stable_export_templates.tpz" -o templates.tpz
+          printf '%s\n' 'cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4  editor.zip' 'f298490b8d44d934be425a5a65a51bf15f422428b229a06a6e11d9ffea248011  templates.tpz' | sha256sum --check --strict
+          unzip -q editor.zip -d arch002-engine
+          chmod +x arch002-engine/Godot_v4.7.2-stable_linux.x86_64
+          unzip -j -q templates.tpz templates/version.txt templates/web_nothreads_release.zip templates/web_nothreads_debug.zip -d arch002-templates
+          test "$(arch002-engine/Godot_v4.7.2-stable_linux.x86_64 --version)" = '4.7.2.stable.official.ed1daf0bf'
+      - name: Exercise build-helper fixture tests
+        run: python3 -B spikes/web_delivery/test_reproduce_export.py
+      - name: Native import, store tests, scene smoke and web export
+        run: |
+          set -euo pipefail
+          python3 spikes/web_delivery/reproduce_export.py --godot "$RUNNER_TEMP/arch002-engine/Godot_v4.7.2-stable_linux.x86_64" --templates "$RUNNER_TEMP/arch002-templates"
+      - name: Retain exact-head export and manifest (not a deployment)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: arch002-web-${{ github.event.pull_request.head.sha }}
+          path: spikes/web_delivery/build/${{ github.event.pull_request.head.sha }}/
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Browser smoke on the authorized CI runner (not Site hosting)
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        timeout-minutes: 7
+        run: |
+          set -euo pipefail
+          command -v google-chrome
+          command -v chromedriver
+          google-chrome --version
+          chromedriver --version
+          python3 - <<'PY'
+          import base64
+          import functools
+          import hashlib
+          import http.server
+          import json
+          import os
+          import pathlib
+          import signal
+          import subprocess
+          import tempfile
+          import threading
+          import time
+          import urllib.error
+          import urllib.request
+
+          root = pathlib.Path("spikes/web_delivery/build") / os.environ["EXPECTED_HEAD"]
+          manifest = json.loads((root / "build-manifest.json").read_text())
+          assert manifest["source_commit"] == os.environ["EXPECTED_HEAD"]
+          for name, entry in manifest["files"].items():
+              data = (root / name).read_bytes()
+              assert len(data) == entry["bytes"], name
+              assert hashlib.sha256(data).hexdigest() == entry["sha256"], name
+
+          class Handler(http.server.SimpleHTTPRequestHandler):
+              def log_message(self, fmt, *args):
+                  print("HTTP:", fmt % args, flush=True)
+
+          # Bind only to the ephemeral CI runner, never to a public interface.
+          server = http.server.ThreadingHTTPServer(
+              ("127.0.0.1", 0), functools.partial(Handler, directory=str(root)))
+          threading.Thread(target=server.serve_forever, daemon=True).start()
+          url = f"http://127.0.0.1:{server.server_port}/index.html"
+          driver = subprocess.Popen(["chromedriver", "--port=9515"])
+          session = None
+          def api(method, path, value=None):
+              req = urllib.request.Request("http://127.0.0.1:9515" + path,
+                  data=None if value is None else json.dumps(value).encode(),
+                  headers={"Content-Type": "application/json"}, method=method)
+              with urllib.request.urlopen(req, timeout=35) as response:
+                  return json.load(response)["value"]
+
+          def until(fn, label, seconds=35):
+              deadline = time.monotonic() + seconds
+              while time.monotonic() < deadline:
+                  result = fn()
+                  if result:
+                      return result
+                  time.sleep(0.5)
+              raise AssertionError("Timed out: " + label)
+
+          def script(source, args=None):
+              return api("POST", session + "/execute/sync",
+                         {"script": source, "args": args or []})
+
+          def saved(filename="delivery_probe.json"):
+              # Inspect the browser's persisted IDBFS data, not a synthetic
+              # page variable, a save-button receipt, or a mocked filesystem.
+              return api("POST", session + "/execute/async", {"args": [filename], "script": """
+                const filename = arguments[0];
+                const done = arguments[arguments.length - 1];
+                (async () => {
+                  for (const info of await indexedDB.databases()) {
+                    if (!info.name) continue;
+                    const db = await new Promise((resolve, reject) => {
+                      const r = indexedDB.open(info.name);
+                      r.onsuccess = () => resolve(r.result);
+                      r.onerror = () => reject(r.error);
+                    });
+                    try {
+                      if (!db.objectStoreNames.contains('FILE_DATA')) continue;
+                      const records = await new Promise((resolve, reject) => {
+                        const matches = [];
+                        const r = db.transaction('FILE_DATA', 'readonly')
+                                    .objectStore('FILE_DATA').openCursor();
+                        r.onerror = () => reject(r.error);
+                        r.onsuccess = () => {
+                          const c = r.result;
+                          if (!c) return resolve(matches);
+                          if (String(c.key).endsWith('/' + filename) &&
+                              c.value && c.value.contents) {
+                            matches.push(JSON.parse(new TextDecoder().decode(c.value.contents)));
+                          }
+                          c.continue();
+                        };
+                      });
+                      if (records.length === 1) return records[0];
+                      if (records.length > 1) throw new Error('Ambiguous persisted probe');
+                    } finally { db.close(); }
+                  }
+                  return null;
+                })().then(done, e => done({browser_error: String(e)}));
+              """})
+
+          def click(x, y):
+              api("POST", session + "/actions", {"actions": [{
+                  "type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
+                  "actions": [{"type": "pointerMove", "duration": 0, "origin": "viewport",
+                               "x": x, "y": y},
+                              {"type": "pointerDown", "button": 0},
+                              {"type": "pointerUp", "button": 0}]}]})
+
+          def canvas_ready():
+              # The pinned Godot HTML shell removes #status when Engine.startGame resolves.
+              return script("""
+                const c = document.querySelector('canvas');
+                const s = document.getElementById('status');
+                return c && c.width > 0 && c.height > 0 &&
+                       !s
+                  ? c.getBoundingClientRect().toJSON() : null;
+              """)
+
+          def same_payload(a, b):
+              return {k: v for k, v in a.items() if k != "revision"} == {k: v for k, v in b.items() if k != "revision"}
+
+          def greeting_count(n):
+              value = saved()
+              if value and value.get("browser_error"):
+                  raise RuntimeError(value["browser_error"])
+              return value if value and value.get("greetings") == n else None
+
+          try:
+              # Keep the normal Chrome sandbox and browser policy intact.
+              with tempfile.TemporaryDirectory(prefix="arch002-chrome-") as profile:
+                  def driver_ready():
+                      try:
+                          return api("GET", "/status").get("ready")
+                      except OSError:
+                          return False
+                  until(driver_ready, "ChromeDriver readiness", 15)
+                  opened = api("POST", "/session", {"capabilities": {"alwaysMatch": {
+                      "browserName": "chrome", "goog:chromeOptions": {"args": [
+                          "--headless=new", "--window-size=900,1000",
+                          "--disable-dev-shm-usage", "--user-data-dir=" + profile]}}}})
+                  session = "/session/" + opened["sessionId"]
+                  print("Browser:", opened["capabilities"].get("browserVersion"), flush=True)
+                  api("POST", session + "/timeouts", {"script": 10000, "pageLoad": 30000})
+                  api("POST", session + "/goog/cdp/execute", {"cmd": "Emulation.setDeviceMetricsOverride",
+                      "params": {"width": 720, "height": 820, "deviceScaleFactor": 1, "mobile": False}})
+                  api("POST", session + "/url", {"url": url})
+                  bounds = until(canvas_ready, "Godot loader completion")
+                  print("Canvas bounds:", bounds, flush=True)
+                  assert saved() is None, "Fresh browser profile unexpectedly contains a save"
+                  # Normal mouse input at the greeting button in the 720x820
+                  # diagnostic scene. The coordinate is a fixture, not proof
+                  # of arbitrary layouts or touch support. Fail closed if wrong.
+                  def greet():
+                      b = until(canvas_ready, "canvas after navigation")
+                      click(round(b["x"] + b["width"] * 0.5),
+                            round(b["y"] + b["height"] * (335 / 820)))
+                  greet()
+                  first = until(lambda: greeting_count(1), "first greeting persisted in IndexedDB")
+                  assert first["individual"]["ray_id"] == "probe_ray_001"
+                  assert first["revision"] == 1
+                  def confirmed(revision):
+                      return script("""
+                        const badge = document.getElementById('save-confirmation');
+                        return !badge.hidden && badge.dataset.state === 'saved' &&
+                            badge.dataset.revision === String(arguments[0]) &&
+                            badge.textContent === 'Saved revision ' + arguments[0];
+                      """, [revision])
+                  assert until(lambda: confirmed(first["revision"]), "first exact durable-save confirmation")
+                  print("First greeting persisted and confirmed.", flush=True)
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "Godot loader after reload")
+                  greet()
+                  second = until(lambda: greeting_count(2), "second greeting after reload")
+                  assert second["individual"] == first["individual"]
+                  assert second["revision"] == first["revision"] + 1
+                  assert until(lambda: confirmed(second["revision"]), "second exact durable-save confirmation")
+                  print(json.dumps({"durable_save_confirmation": "pass", "revision": second["revision"], "actual_site_verified": False}), flush=True)
+                  # Exercise the real diagnostic job via its normal UI controls.
+                  # Fixed viewport fixture; persisted state is the assertion,
+                  # never the click itself. Do not inject clocks or save data.
+                  def timer_phase(phase):
+                      value = saved()
+                      if value and value.get("browser_error"):
+                          raise RuntimeError(value["browser_error"])
+                      if value and value.get("timer", {}).get("phase") == phase:
+                          assert value["individual"] == second["individual"]
+                          assert value["greetings"] == 2
+                          return value
+                      return None
+
+                  def timer_button(y):
+                      b = until(canvas_ready, "canvas for timer action")
+                      click(round(b["x"] + b["width"] * 0.5),
+                            round(b["y"] + b["height"] * (y / 820)))
+
+                  assert second["timer"]["phase"] == "idle", second
+                  timer_button(435)
+                  running = until(lambda: timer_phase("running"), "timer start persisted", 15)
+                  assert 0 < running["timer"]["remaining_ms"] <= 10000, running
+                  assert running["timer"]["wall_marker_ms"] > 0, running
+                  print("Timer start persisted:", running["timer"], flush=True)
+
+                  # Unload the game completely before the deadline and return
+                  # after real elapsed wall time. This is not a background-tab
+                  # test or a mocked offline-time calculation.
+                  api("POST", session + "/url", {"url": "about:blank"})
+                  assert script("return document.querySelector('canvas') === null")
+                  time.sleep(11)
+                  api("POST", session + "/url", {"url": url})
+                  until(canvas_ready, "Godot loader after offline interval")
+                  ready = until(lambda: timer_phase("ready"), "offline timer completion persisted")
+                  assert ready["timer"]["remaining_ms"] == 0, ready
+                  assert ready["timer"]["wall_marker_ms"] >= running["timer"]["wall_marker_ms"]
+                  print("Offline timer completion persisted:", ready["timer"], flush=True)
+
+                  timer_button(495)
+                  claimed = until(lambda: timer_phase("claimed"), "timer claim persisted")
+                  assert claimed["timer"]["remaining_ms"] == 0, claimed
+                  assert claimed["timer"]["wall_marker_ms"] == ready["timer"]["wall_marker_ms"]
+                  # Repeated normal clicks and a subsequent reload must not
+                  # change the completed diagnostic record.
+                  timer_button(495)
+                  time.sleep(2)
+                  assert saved() == claimed, "Repeated claim changed the committed record"
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "Godot loader after claimed timer reload")
+                  assert until(lambda: timer_phase("claimed"), "claimed timer after reload") == claimed
+                  timer_button(495)
+                  time.sleep(2)
+                  assert saved() == claimed, "Claim after reload changed the committed record"
+                  print(json.dumps({"browser_timer": "pass", "source_commit": manifest["source_commit"],
+                      "observations": ["normal start", "persisted running phase", "unloaded interval",
+                                       "persisted ready phase", "normal claim", "repeated claim and reload"],
+                      "actual_site_verified": False}), flush=True)
+                  # Real UI backup round-trip, not an injected profile.
+                  evidence = pathlib.Path(os.environ["RUNNER_TEMP"]) / "arch002-browser-evidence"
+                  evidence.mkdir(exist_ok=True)
+
+                  def screenshot(name):
+                      (evidence / (name + ".png")).write_bytes(
+                          base64.b64decode(api("GET", session + "/screenshot")))
+
+                  def keys(*values):
+                      events = []
+                      for value in values:
+                          events.extend([{"type": "keyDown", "value": value},
+                                         {"type": "keyUp", "value": value}])
+                      api("POST", session + "/actions", {"actions": [
+                          {"type": "key", "id": "keyboard", "actions": events}]})
+
+                  def scroll_bottom():
+                      # Scroll over the title region rather than the editable
+                      # backup text, which has its own scrolling behavior.
+                      b = until(canvas_ready, "canvas for scrolling")
+                      for _ in range(6):
+                          api("POST", session + "/actions", {"actions": [{
+                              "type": "wheel", "id": "wheel",
+                              "actions": [{"type": "scroll", "origin": "viewport",
+                                  "x": round(b["x"] + b["width"] * 0.5),
+                                  "y": round(b["y"] + b["height"] * (80 / 820)),
+                                  "deltaX": 0, "deltaY": 500, "duration": 100}]}]})
+                      time.sleep(0.5)
+
+                  def preview_backup():
+                      # At the bottom, preview is immediately above the
+                      # save-failure checkbox. Keep this fixed-layout fixture
+                      # consistent for the valid and corrupt cases.
+                      timer_button(752)
+                      time.sleep(0.5)
+
+                  timer_button(590)  # Export the two-greeting, claimed timer record.
+                  screenshot("01-export")
+                  greet()
+                  third = until(lambda: greeting_count(3), "post-export greeting persisted")
+                  assert third["individual"] == claimed["individual"]
+                  assert third["timer"] == claimed["timer"]
+                  assert until(lambda: saved("delivery_probe.json.previous") == claimed,
+                               "previous-good copy after greeting")
+                  scroll_bottom()
+                  preview_backup()
+                  screenshot("02-preview-before-confirm")
+                  assert saved() == third, "Preview changed active profile before confirmation"
+                  keys("\ue00c")  # Escape cancels the confirmation dialog.
+                  time.sleep(0.5)
+                  assert saved() == third, "Cancel changed active profile"
+                  preview_backup()
+                  keys("\ue007")  # Enter accepts the normal confirmation dialog.
+                  restored = until(lambda: greeting_count(2), "confirmed backup restore persisted")
+                  assert same_payload(restored, claimed), "Backup restore changed identity or timer"
+                  assert restored["revision"] == third["revision"] + 1, "Backup rewound revision"
+                  assert until(lambda: saved("delivery_probe.json.previous") == third,
+                               "previous-good copy retained after restore")
+                  screenshot("03-restored")
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "loader after backup restore")
+                  assert until(lambda: greeting_count(2), "restored profile after reload") == restored
+
+                  # The backup textbox starts empty after reload. Type malformed
+                  # JSON via real keyboard events; do not edit IndexedDB.
+                  timer_button(680)
+                  keys(*"not-json")
+                  scroll_bottom()
+                  preview_backup()
+                  screenshot("04-corrupt-preview")
+                  keys("\ue007")
+                  time.sleep(2)
+                  assert saved() == restored, "Malformed import changed active profile"
+                  assert saved("delivery_probe.json.previous") == third, "Malformed import changed previous-good copy"
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "loader after malformed import")
+                  assert until(lambda: greeting_count(2), "unchanged profile after malformed import") == restored
+                  print(json.dumps({"browser_backup": "pass", "source_commit": manifest["source_commit"],
+                      "observations": ["export UI", "preview nonmutation", "cancel nonmutation",
+                                       "confirmed restore", "previous-good copy", "reload",
+                                       "malformed input attempt and unchanged records"],
+                      "visual_status_review_required": True, "actual_site_verified": False}), flush=True)
+                  # Real UI failure simulation, not a browser storage fault injection.
+                  # The timer is already claimed, so no autonomous checkpoint
+                  # can legitimately change either record during this test.
+                  def scroll_top():
+                      b = until(canvas_ready, "canvas for upward scrolling")
+                      for _ in range(6):
+                          api("POST", session + "/actions", {"actions": [{
+                              "type": "wheel", "id": "wheel",
+                              "actions": [{"type": "scroll", "origin": "viewport",
+                                  "x": round(b["x"] + b["width"] * 0.5),
+                                  "y": round(b["y"] + b["height"] * (80 / 820)),
+                                  "deltaX": 0, "deltaY": -500, "duration": 100}]}]})
+                      time.sleep(0.5)
+
+                  def toggle_save_failure():
+                      scroll_bottom()
+                      # Bottom row of the existing 720x820 fixture.
+                      timer_button(805)
+                      time.sleep(0.5)
+                      scroll_top()
+
+                  before_failure = saved()
+                  previous_before_failure = saved("delivery_probe.json.previous")
+                  assert before_failure == restored
+                  assert previous_before_failure == third
+                  toggle_save_failure()
+                  screenshot("05-failure-enabled")
+                  greet()
+                  time.sleep(2)
+                  screenshot("06-failed-greeting")
+                  assert saved() == before_failure, "Failed greeting changed active profile"
+                  assert saved("delivery_probe.json.previous") == previous_before_failure, (
+                      "Failed greeting changed previous-good profile")
+                  toggle_save_failure()
+                  screenshot("07-failure-disabled")
+                  # A successful retry in the same scene must apply exactly
+                  # one greeting, not accumulate the rejected candidate.
+                  greet()
+                  retried = until(lambda: greeting_count(3), "greeting after disabling simulated failure")
+                  assert same_payload(retried, third), "Successful retry did not preserve identity and timer"
+                  assert retried["revision"] == before_failure["revision"] + 1
+                  assert until(lambda: saved("delivery_probe.json.previous") == before_failure,
+                               "previous-good copy after retry")
+                  screenshot("08-retry-saved")
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "loader after successful retry")
+                  assert until(lambda: greeting_count(3), "successful retry after reload") == retried
+                  assert saved("delivery_probe.json.previous") == before_failure
+                  print(json.dumps({"browser_simulated_write_failure": "pass",
+                      "source_commit": manifest["source_commit"],
+                      "observations": ["failure toggle", "attempted normal greeting",
+                                       "active and previous-good unchanged", "same-scene retry once",
+                                       "reload after successful retry"],
+                      "visual_status_review_required": True, "real_browser_storage_fault_verified": False,
+                      "actual_site_verified": False}), flush=True)
+                  # Verify two real documents in the same browser profile.
+                  owner = api("GET", session + "/window")
+                  other = api("POST", session + "/window/new", {"type": "tab"})["handle"]
+                  def switch(handle):
+                      api("POST", session + "/window", {"handle": handle})
+                      api("POST", session + "/goog/cdp/execute", {"cmd": "Emulation.setDeviceMetricsOverride",
+                          "params": {"width": 720, "height": 820, "deviceScaleFactor": 1, "mobile": False}})
+                  def writer_state():
+                      return script("return document.body.dataset.writerState")
+                  def retry_writer():
+                      el = api("POST", session + "/element",
+                               {"using": "css selector", "value": "#writer-retry"})
+                      key = el["element-6066-11e4-a52e-4f735466cecf"]
+                      api("POST", session + "/element/" + key + "/click", {})
+                  switch(other)
+                  api("POST", session + "/url", {"url": url})
+                  until(lambda: writer_state() == "busy", "second tab read-only")
+                  assert not canvas_ready() and script("return window.littleRayProbeWriter") is False
+                  assert saved() == retried
+                  retry_writer()
+                  until(lambda: writer_state() == "busy", "takeover refused while owner lives")
+                  assert not canvas_ready() and saved() == retried
+                  switch(owner)
+                  assert writer_state() == "writer"
+                  greet()
+                  fourth = until(lambda: greeting_count(4), "original writer persists after refused takeover")
+                  assert fourth["revision"] == retried["revision"] + 1
+                  assert until(lambda: saved("delivery_probe.json.previous") == retried, "old writer recovery copy")
+                  api("DELETE", session + "/window")
+                  switch(other)
+                  assert writer_state() == "busy" and not canvas_ready(), "automatic takeover is forbidden"
+                  retry_writer()
+                  until(canvas_ready, "explicit takeover starts fresh engine")
+                  assert writer_state() == "writer"
+                  greet()
+                  fifth = until(lambda: greeting_count(5), "new writer preserves latest progress")
+                  assert fifth["revision"] == fourth["revision"] + 1
+                  assert fifth["individual"] == fourth["individual"] and fifth["timer"] == fourth["timer"]
+                  assert until(lambda: saved("delivery_probe.json.previous") == fourth, "new writer recovery copy")
+                  print(json.dumps({"browser_writer_ownership": "pass", "source_commit": manifest["source_commit"],
+                      "observations": ["second tab denied engine mount", "live-owner takeover refused",
+                                       "old owner persisted progress", "explicit takeover after close",
+                                       "new writer loads latest revision"], "actual_site_verified": False}), flush=True)
+                  # Exercise the normal greeting control using browser-generated touch
+                  # events, not JavaScript click(), direct game calls or mouse actions.
+                  def cdp(cmd, params):
+                      return api("POST", session + "/goog/cdp/execute", {"cmd": cmd, "params": params})
+                  cdp("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 1})
+                  api("POST", session + "/refresh", {})
+                  b = until(canvas_ready, "touch-enabled loader")
+                  assert saved() == fifth, "Touch-mode reload changed profile"
+                  assert script("return navigator.maxTouchPoints") >= 1
+                  script("""
+                    window.arch002TouchEvents = [];
+                    for (const type of ['touchstart', 'touchend', 'touchcancel']) {
+                      document.addEventListener(type, e => window.arch002TouchEvents.push({
+                        type: e.type, trusted: e.isTrusted,
+                        canvas: e.target instanceof HTMLCanvasElement
+                      }), {capture: true, passive: true});
+                    }
+                  """)
+                  point = {"x": round(b["x"] + b["width"] * 0.5),
+                           "y": round(b["y"] + b["height"] * (335 / 820)), "id": 0}
+                  cdp("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [point]})
+                  time.sleep(0.1)
+                  cdp("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+                  events = script("return window.arch002TouchEvents")
+                  assert [e["type"] for e in events] == ["touchstart", "touchend"], events
+                  assert all(e["trusted"] and e["canvas"] for e in events), events
+                  touched = until(lambda: greeting_count(6), "touch greeting persisted")
+                  assert touched["revision"] == fifth["revision"] + 1
+                  assert touched["individual"] == fifth["individual"] and touched["timer"] == fifth["timer"]
+                  assert until(lambda: saved("delivery_probe.json.previous") == fifth, "touch recovery copy")
+                  time.sleep(2)
+                  assert saved() == touched, "One touch caused duplicate or delayed mutation"
+                  screenshot("09-touch-greeting")
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "reload after touch greeting")
+                  assert saved() == touched and saved("delivery_probe.json.previous") == fifth
+                  print(json.dumps({"browser_emulated_touch": "pass", "source_commit": manifest["source_commit"],
+                      "events": events, "physical_device_verified": False,
+                      "actual_site_verified": False, "audio_verified": False}), flush=True)
+                  # Observe the actual Web Audio graph on a new document. The
+                  # CI-only analyser taps destination-bound nodes in parallel:
+                  # it does not resume a context, trigger playback or route
+                  # any extra signal to the speakers. Keep autoplay defaults.
+                  cdp("Emulation.setTouchEmulationEnabled", {"enabled": False})
+                  cdp("Page.addScriptToEvaluateOnNewDocument", {"source": """
+                    (() => {
+                      const observed = window.arch002Audio = {
+                        taps: 0, running: 0, peak: 0, trustedCanvasDown: 0, errors: []
+                      };
+                      const taps = [];
+                      const seen = new WeakMap();
+                      const connect = AudioNode.prototype.connect;
+                      AudioNode.prototype.connect = function(destination, ...args) {
+                        const result = Reflect.apply(connect, this, [destination, ...args]);
+                        if (destination === this.context.destination) {
+                          try {
+                            const output = args[0] ?? 0;
+                            if (!seen.has(this)) seen.set(this, new Set());
+                            if (!seen.get(this).has(output)) {
+                              const analyser = this.context.createAnalyser();
+                              analyser.fftSize = 512;
+                              Reflect.apply(connect, this, [analyser, output, 0]);
+                              seen.get(this).add(output);
+                              taps.push({analyser, samples: new Float32Array(analyser.fftSize)});
+                              observed.taps = taps.length;
+                            }
+                          } catch (error) { observed.errors.push(String(error)); }
+                        }
+                        return result;
+                      };
+                      document.addEventListener('pointerdown', event => {
+                        if (event.isTrusted && event.target instanceof HTMLCanvasElement)
+                          observed.trustedCanvasDown++;
+                      }, true);
+                      setInterval(() => {
+                        observed.running = 0;
+                        for (const {analyser, samples} of taps) {
+                          if (analyser.context.state !== 'running') continue;
+                          observed.running++;
+                          analyser.getFloatTimeDomainData(samples);
+                          for (const value of samples)
+                            observed.peak = Math.max(observed.peak, Math.abs(value));
+                        }
+                      }, 10);
+                    })();
+                  """})
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "audio-observed fresh loader")
+                  assert saved() == touched, "Audio-test reload changed profile"
+                  def audio_observation():
+                      return script("return window.arch002Audio")
+                  until(lambda: audio_observation()["taps"] > 0, "destination audio graph")
+                  time.sleep(1)
+                  silent = audio_observation()
+                  assert not silent["errors"] and silent["trustedCanvasDown"] == 0, silent
+                  assert silent["peak"] < 0.0001, ("Unexpected pre-gesture signal", silent)
+                  greet()
+                  seventh = until(lambda: greeting_count(7), "audio gesture greeting persisted")
+                  assert seventh["revision"] == touched["revision"] + 1
+                  assert seventh["individual"] == touched["individual"] and seventh["timer"] == touched["timer"]
+                  def playing_signal():
+                      observation = audio_observation()
+                      assert not observation["errors"], observation
+                      return observation if (observation["running"] > 0 and
+                          observation["trustedCanvasDown"] == 1 and observation["peak"] > 0.001) else None
+                  played = until(playing_signal, "non-silent running Web Audio signal after gesture", 10)
+                  assert until(lambda: saved("delivery_probe.json.previous") == touched,
+                               "audio greeting recovery copy")
+                  screenshot("10-audio-gesture")
+                  audio_report = {"browser_gesture_audio_graph": "pass",
+                      "source_commit": manifest["source_commit"],
+                      "before_gesture": silent, "after_gesture": played,
+                      "observations": ["no pre-gesture signal", "trusted canvas pointer",
+                          "running Web Audio context", "non-silent destination-bound signal"],
+                      "physical_audio_output_verified": False, "actual_site_verified": False}
+                  (evidence / "audio-observation.json").write_text(json.dumps(audio_report, indent=2))
+                  print(json.dumps(audio_report), flush=True)
+                  # Force an actual IndexedDB write transaction to abort,
+                  # after a real put succeeds but before commit. Keep the fault
+                  # armed for this document so retries cannot silently persist
+                  # its volatile snapshot. No application failure flag is set.
+                  assert saved() == seventh
+                  script("""
+                    window.arch002StorageFault = {aborts: 0, errors: []};
+                    const armed = new WeakSet();
+                    const put = IDBObjectStore.prototype.put;
+                    IDBObjectStore.prototype.put = function(...args) {
+                      const request = Reflect.apply(put, this, args);
+                      const tx = this.transaction;
+                      if (this.name === 'FILE_DATA' && tx.mode === 'readwrite' &&
+                          !armed.has(tx)) {
+                        armed.add(tx);
+                        tx.addEventListener('abort', () => window.arch002StorageFault.aborts++,
+                                            {once: true});
+                        request.addEventListener('success', () => {
+                          try { tx.abort(); }
+                          catch (error) { window.arch002StorageFault.errors.push(String(error)); }
+                        }, {once: true});
+                      }
+                      return request;
+                    };
+                  """)
+                  greet()
+                  def storage_failure():
+                      result = script("""
+                        const warning = document.getElementById('storage-warning');
+                        return {fault: window.arch002StorageFault,
+                                writer: window.littleRayProbeWriter,
+                                state: document.body.dataset.storageState,
+                                visible: !warning.hidden && warning.getBoundingClientRect().height > 0,
+                                message: warning.textContent};
+                      """)
+                      assert not result["fault"]["errors"], result
+                      return result if result["fault"]["aborts"] > 0 else None
+                  fault = until(storage_failure, "actual IndexedDB transaction abort", 20)
+                  assert fault["state"] == "failed" and fault["writer"] is False, fault
+                  assert fault["visible"] and "Save unavailable" in fault["message"], fault
+                  assert script("return document.getElementById('save-confirmation').hidden"), "Failed write left a positive save badge visible"
+                  assert saved() == seventh, "Aborted browser transaction changed active save"
+                  assert saved("delivery_probe.json.previous") == touched, "Aborted browser transaction changed recovery copy"
+                  greet()  # Later actions must not persist while the document is faulted.
+                  time.sleep(2)
+                  assert saved() == seventh and saved("delivery_probe.json.previous") == touched
+                  screenshot("11-indexeddb-abort")
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "reload after real storage transaction abort")
+                  assert saved() == seventh and saved("delivery_probe.json.previous") == touched
+                  assert script("return window.littleRayProbeWriter === true && document.getElementById('storage-warning').hidden")
+                  greet()
+                  eighth = until(lambda: greeting_count(8), "single greeting after fresh reload", 20)
+                  assert eighth["revision"] == seventh["revision"] + 1
+                  assert eighth["individual"] == seventh["individual"] and eighth["timer"] == seventh["timer"]
+                  assert until(lambda: saved("delivery_probe.json.previous") == seventh, "post-abort recovery copy")
+                  screenshot("12-indexeddb-recovery")
+                  storage_report = {"browser_indexeddb_abort": "pass",
+                      "source_commit": manifest["source_commit"], "failure": fault,
+                      "before": seventh, "after_reload_retry": eighth,
+                      "fault_injection": "real transaction.abort after put success in disposable CI browser",
+                      "physical_disk_failure_verified": False, "crash_durability_verified": False,
+                      "actual_site_verified": False}
+                  (evidence / "storage-observation.json").write_text(json.dumps(storage_report, indent=2))
+                  print(json.dumps(storage_report), flush=True)
+                  # Only kill this disposable CI browser, never an arbitrary system process.
+                  # The previous reads came from independent IndexedDB read-only transactions.
+                  assert eighth == saved() and saved("delivery_probe.json.previous") == seventh
+                  profile_arg = os.fsencode("--user-data-dir=" + profile)
+                  browser_pids = []
+                  for entry in pathlib.Path("/proc").iterdir():
+                      if not entry.name.isdigit():
+                          continue
+                      try:
+                          argv = (entry / "cmdline").read_bytes().split(b"\0")
+                          exe = (entry / "exe").resolve(strict=True).name
+                      except (OSError, RuntimeError):
+                          continue
+                      if (exe == "chrome" and profile_arg in argv and
+                              not any(arg.startswith(b"--type=") for arg in argv)):
+                          browser_pids.append(int(entry.name))
+                  assert len(browser_pids) == 1, f"Expected one disposable Chrome browser: {browser_pids}"
+                  browser_pid = browser_pids[0]
+                  # Recheck the exact process identity immediately before termination.
+                  assert profile_arg in pathlib.Path(f"/proc/{browser_pid}/cmdline").read_bytes().split(b"\0")
+                  os.kill(browser_pid, signal.SIGKILL)
+
+                  def browser_exited():
+                      try:
+                          return pathlib.Path(f"/proc/{browser_pid}/stat").read_text().rsplit(")", 1)[1].split()[0] == "Z"
+                      except FileNotFoundError:
+                          return True
+
+                  until(browser_exited, "abrupt Chrome browser exit", 15)
+                  try:
+                      api("DELETE", session)
+                  except urllib.error.HTTPError as error:
+                      if error.code != 404:
+                          raise
+                  session = None
+                  until(driver_ready, "ChromeDriver after abrupt browser exit", 15)
+                  reopened = api("POST", "/session", {"capabilities": {"alwaysMatch": {
+                      "browserName": "chrome", "goog:chromeOptions": {"args": [
+                          "--headless=new", "--window-size=900,1000",
+                          "--disable-dev-shm-usage", "--user-data-dir=" + profile]}}}})
+                  session = "/session/" + reopened["sessionId"]
+                  api("POST", session + "/timeouts", {"script": 10000, "pageLoad": 30000})
+                  cdp("Emulation.setDeviceMetricsOverride", {"width": 720, "height": 820,
+                      "deviceScaleFactor": 1, "mobile": False})
+                  api("POST", session + "/url", {"url": url})
+                  until(canvas_ready, "fresh Chrome process after abrupt termination")
+                  assert script("return window.littleRayProbeWriter === true")
+                  assert saved() == eighth, "Last committed active profile lost after abrupt browser exit"
+                  assert saved("delivery_probe.json.previous") == seventh, "Recovery copy lost after abrupt browser exit"
+                  screenshot("13-browser-crash-reopen")
+                  greet()
+                  ninth = until(lambda: greeting_count(9), "single action after browser crash recovery", 20)
+                  assert ninth["revision"] == eighth["revision"] + 1
+                  assert ninth["individual"] == eighth["individual"] and ninth["timer"] == eighth["timer"]
+                  assert until(lambda: saved("delivery_probe.json.previous") == eighth, "post-crash previous-good copy")
+                  screenshot("14-browser-crash-retry")
+                  crash_report = {"browser_process_crash_recovery": "pass",
+                      "source_commit": manifest["source_commit"], "method": "SIGKILL after committed IndexedDB readback",
+                      "before": eighth, "after_restart_action": ninth,
+                      "browser": reopened["capabilities"].get("browserVersion"),
+                      "mid_transaction_crash_verified": False, "physical_power_loss_verified": False,
+                      "actual_site_verified": False}
+                  (evidence / "crash-observation.json").write_text(json.dumps(crash_report, indent=2))
+                  print(json.dumps(crash_report), flush=True)
+                  # Exercise a real synchronous transaction() refusal, without
+                  # closing the engine's own connection or corrupting its data.
+                  refusal = api("POST", session + "/execute/async", {"args": [], "script": """
+                    const done = arguments[arguments.length - 1];
+                    (async () => {
+                      // Locate the mounted database using the persisted active file.
+                      // FILE_DATA is the object store, not necessarily the database name.
+                      const matches = [];
+                      for (const info of await indexedDB.databases()) {
+                        if (!info.name) continue;
+                        const candidate = await new Promise((resolve, reject) => {
+                          const r = indexedDB.open(info.name);
+                          r.onsuccess = () => resolve(r.result);
+                          r.onerror = () => reject(r.error);
+                        });
+                        try {
+                          if (!candidate.objectStoreNames.contains('FILE_DATA')) continue;
+                          const keys = await new Promise((resolve, reject) => {
+                            const r = candidate.transaction('FILE_DATA', 'readonly')
+                                               .objectStore('FILE_DATA').getAllKeys();
+                            r.onsuccess = () => resolve(r.result);
+                            r.onerror = () => reject(r.error);
+                          });
+                          if (keys.some(key => String(key).endsWith('/delivery_probe.json')))
+                            matches.push(candidate);
+                        } finally { candidate.close(); }
+                      }
+                      if (matches.length !== 1)
+                        throw new Error('Expected exactly one existing probe IDBFS database');
+                      const db = matches[0];
+                      const attempt = mode => {
+                        try { db.transaction('FILE_DATA', mode); return 'unexpected success'; }
+                        catch (e) { return e.name; }
+                      };
+                      const readonly = attempt('readonly');
+                      const writerAfterReadonly = window.littleRayProbeWriter;
+                      const write = attempt('readwrite');
+                      const warning = document.getElementById('storage-warning');
+                      return {database: db.name, readonly, writerAfterReadonly, write,
+                              writer: window.littleRayProbeWriter,
+                              state: document.body.dataset.storageState,
+                              visible: !warning.hidden && warning.getBoundingClientRect().height > 0,
+                              message: warning.textContent};
+                    })().then(done, e => done({browser_error: String(e)}));
+                  """})
+                  assert refusal.get("readonly") == "InvalidStateError", refusal
+                  assert refusal["writerAfterReadonly"] is True, refusal
+                  assert refusal["write"] == "InvalidStateError", refusal
+                  assert refusal["writer"] is False and refusal["state"] == "failed", refusal
+                  assert refusal["visible"] and "Displayed progress may include unsaved changes" in refusal["message"], refusal
+                  greet()
+                  time.sleep(2)
+                  assert saved() == ninth and saved("delivery_probe.json.previous") == eighth
+                  screenshot("15-indexeddb-sync-refusal")
+                  api("POST", session + "/refresh", {})
+                  until(canvas_ready, "reload after synchronous storage refusal")
+                  assert saved() == ninth and saved("delivery_probe.json.previous") == eighth
+                  assert script("return window.littleRayProbeWriter === true && document.getElementById('storage-warning').hidden")
+                  refusal_report = {"browser_sync_storage_refusal": "pass",
+                      "source_commit": manifest["source_commit"], "observation": refusal,
+                      "before_and_after": ninth, "previous_good": eighth,
+                      "method": "real closed independent IDBFS database connection; not engine connection",
+                      "actual_site_verified": False}
+                  (evidence / "storage-refusal-observation.json").write_text(json.dumps(refusal_report, indent=2))
+                  print(json.dumps(refusal_report), flush=True)
+                  print(json.dumps({"browser_smoke": "pass", "source_commit": manifest["source_commit"],
+                      "browser": opened["capabilities"].get("browserVersion"),
+                      "observations": ["loader completion", "mouse greeting", "IndexedDB persistence",
+                                       "reload and second greeting"],
+                      "actual_site_verified": False, "audio_verified": False}), flush=True)
+                  # Independent production-profile transport on real browser IndexedDB.
+                  # Separate database; the diagnostic scene and its save stay untouched.
+                  transport_source = pathlib.Path("spikes/web_delivery/profile_transport.js").read_text()
+                  transport_fixture = pathlib.Path("tests/arch002_profile_transport_browser.js").read_text()
+                  # The expanded fixture has its own bounded script budget.
+                  # Keep the HTTP deadline (35s) and exact assertion count.
+                  api("POST", session + "/timeouts", {"script": 25000, "pageLoad": 30000})
+                  transport_started = time.monotonic()
+                  try:
+                      transport_result = api("POST", session + "/execute/async", {
+                          "args": [transport_source], "script": transport_fixture})
+                  except urllib.error.HTTPError as error:
+                      failure = {"profile_transport": "webdriver-error",
+                          "elapsed_seconds": round(time.monotonic() - transport_started, 3),
+                          "http_status": error.code,
+                          "response": error.read().decode("utf-8", errors="replace")[:4096],
+                          "actual_site_verified": False}
+                      observation = evidence / "profile-transport-observation.json"
+                      observation.write_text(json.dumps(failure, indent=2))
+                      # Best-effort diagnostic only; a hung renderer may not respond.
+                      try:
+                          failure["fixture_progress"] = script("return globalThis.__arch002TransportProgress || null")
+                      except Exception as progress_error:
+                          failure["progress_error"] = str(progress_error)
+                      observation.write_text(json.dumps(failure, indent=2))
+                      print(json.dumps(failure), flush=True)
+                      raise
+                  print("Transport elapsed seconds:",
+                      round(time.monotonic() - transport_started, 3), flush=True)
+                  (evidence / "profile-transport-observation.json").write_text(json.dumps(transport_result, indent=2))
+                  print(json.dumps(transport_result), flush=True)
+                  assert transport_result.get("profile_transport") == "pass", transport_result
+                  assert len(transport_result.get("checks", [])) == 153, transport_result
+                  api("DELETE", session)
+                  session = None
+          finally:
+              if session:
+                  try:
+                      api("DELETE", session)
+                  except Exception as error:
+                      print("Browser cleanup:", error, flush=True)
+              driver.terminate()
+              try:
+                  driver.wait(timeout=10)
+              except subprocess.TimeoutExpired:
+                  driver.kill()
+                  driver.wait()
+              server.shutdown()
+          PY
+      - name: Retain browser backup evidence (including failure checkpoints)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: arch002-browser-evidence-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/arch002-browser-evidence/
+          if-no-files-found: warn
+          retention-days: 3
+
+      # Read-only pinned input from the independent gameplay task. The
+      # integration project lives outside both source checkouts.
+      - name: Checkout exact city validation seam (independent input)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 9ef45a520348921424994cc955cd39794defeeb6
+          path: .arch002-city-source
+          persist-credentials: false
+      - name: Native city and staged-profile roundtrip (not hosted)
+        timeout-minutes: 4
+        run: |
+          set -euo pipefail
+          test "$(git -C .arch002-city-source rev-parse HEAD)" = "9ef45a520348921424994cc955cd39794defeeb6"
+          project="$RUNNER_TEMP/arch002-city-integration"
+          mkdir -p "$project"
+          cp -a .arch002-city-source/game/city_checkpoint/. "$project/"
+          cp spikes/web_delivery/profile_commit.gd "$project/"
+          cp tests/arch002_city_bridge.gd "$project/"
+          cp integration/arch002/city_profile_session.gd "$project/"
+          cp tests/arch002_city_session_test.gd "$project/"
+          export XDG_DATA_HOME="$RUNNER_TEMP/arch002-city-userdata"
+          editor="$RUNNER_TEMP/arch002-engine/Godot_v4.7.2-stable_linux.x86_64"
+          printf 'Architect source %s; city source %s\n' "$(git rev-parse HEAD)" "$(git -C .arch002-city-source rev-parse HEAD)"
+          timeout 90s "$editor" --headless --path "$project" --script res://arch002_city_bridge.gd
+          timeout 90s "$editor" --headless --path "$project" --script res://arch002_city_session_test.gd
+          # Generate a real large domain snapshot with the same command path as
+          # the native capacity regression. Test-only data, never player data.
+          cat > "$project/arch002_large_browser_fixture.gd" <<'GD'
+          extends SceneTree
+          const City = preload("res://city_model.gd")
+          func _initialize() -> void:
+              var city = City.new()
+              for i in range(1, 13001):
+                  var argument := "ray-1,1" if i % 2 == 1 else "ray-1,0"
+                  var result: Dictionary = city.command("set_favorite", argument, "ui-" + str(i), city.revision)
+                  if not result.ok:
+                      push_error("Large fixture command failed: " + str(i))
+                      quit(1)
+                      return
+              var model: Dictionary = city.snapshot()
+              if not City.validate_snapshot(model) or model.receipts.size() != 13000:
+                  push_error("Large fixture validation failed")
+                  quit(1)
+                  return
+              var encoded := JSON.stringify(model, "", true, true)
+              var file := FileAccess.open(OS.get_environment("RUNNER_TEMP").path_join("arch002-large-model.json"), FileAccess.WRITE)
+              if file == null or encoded.to_utf8_buffer().size() <= 1048576:
+                  push_error("Large fixture unavailable or below original limit")
+                  quit(1)
+                  return
+              file.store_string(encoded)
+              file.close()
+              quit(0)
+          GD
+          timeout 90s "$editor" --headless --path "$project" --script res://arch002_large_browser_fixture.gd
+          rm "$project/arch002_large_browser_fixture.gd"
+
+      - name: Export combined acknowledged city (isolated candidate)
+        timeout-minutes: 4
+        run: |
+          set -euo pipefail
+          project="$RUNNER_TEMP/arch002-city-integration"
+          export XDG_DATA_HOME="$RUNNER_TEMP/arch002-city-userdata"
+          editor="$RUNNER_TEMP/arch002-engine/Godot_v4.7.2-stable_linux.x86_64"
+          mkdir -p "$XDG_DATA_HOME/godot/export_templates/4.7.2.stable"
+          cp "$RUNNER_TEMP/arch002-templates/"* "$XDG_DATA_HOME/godot/export_templates/4.7.2.stable/"
+          # Only the disposable integration copy changes; gameplay owns its source.
+          cat > "$project/arch002_city_entry.gd" <<'GD'
+          extends Node
+
+          const Session = preload("res://city_profile_session.gd")
+          const CityScene = preload("res://main.tscn")
+
+          var city: Variant
+          var session: Variant
+          var diagnostic_window: Variant
+          var presses: Dictionary = {"plant": 0, "feed": 0, "collect": 0, "harvest": 0, "backup": 0}
+          var downs: Dictionary = {"plant": 0, "feed": 0, "collect": 0, "harvest": 0, "backup": 0}
+          var backup_button: Button
+          var backup_heading: Label
+          var recovery_heading: Label
+          var integration_layout_key: String = ""
+          var backup_panel: ColorRect
+          var backup_text: TextEdit
+          var backup_help: Label
+          var backup_message: Label
+          var backup_body: ScrollContainer
+          var backup_stack: VBoxContainer
+          var backup_export: Button
+          var backup_preview: Button
+          var backup_restore: Button
+          var backup_close: Button
+          var backup_confirmation: String = ""
+          var backup_open_pending: bool = false
+          var backup_open_attempt: Dictionary = {}
+          var restore_pending: bool = false
+          var recovery_panel: ColorRect
+          var recovery_message: Label
+          var recovery_body: ScrollContainer
+          var recovery_stack: VBoxContainer
+          var recovery_confirm: Button
+          var recovery_reload: Button
+          var recovery_confirmation: String = ""
+
+          func _ready() -> void:
+              session = Session.new()
+              session.start_web()
+              city = CityScene.instantiate()
+              if not city.configure_profile_session(session):
+                  push_error("City persistence injection refused; no session-only fallback.")
+                  return
+              add_child(city)
+              setup_backup_ui()
+              setup_recovery_ui()
+              # Read-only CI diagnostics, opt-in on the isolated export.
+              # No command injection, clock acceleration or persistence override.
+              if OS.has_feature("web") and JavaScriptBridge.eval("new URLSearchParams(location.search).get('arch002_test') === '1'"):
+                  diagnostic_window = JavaScriptBridge.get_interface("window")
+                  city.plant_short.button_down.connect(mark_down.bind("plant"))
+                  city.feed_button.button_down.connect(mark_down.bind("feed"))
+                  city.collect_button.button_down.connect(mark_down.bind("collect"))
+                  city.harvest_button.button_down.connect(mark_down.bind("harvest"))
+                  city.plant_short.pressed.connect(mark_pressed.bind("plant"))
+                  city.feed_button.pressed.connect(mark_pressed.bind("feed"))
+                  city.collect_button.pressed.connect(mark_pressed.bind("collect"))
+                  city.harvest_button.pressed.connect(mark_pressed.bind("harvest"))
+                  backup_button.button_down.connect(mark_down.bind("backup"))
+                  backup_button.pressed.connect(mark_pressed.bind("backup"))
+
+          # Isolated integration controls; gameplay's pinned source is untouched.
+          # The full-screen modal suspends normal command processing while a preview
+          # is outstanding. It never permits a restore before exact acknowledgement.
+          func setup_backup_ui() -> void:
+              backup_button = Button.new()
+              backup_button.text = "City backup / restore"
+              backup_button.position = Vector2(800, 607)
+              backup_button.size = Vector2(268, 44)
+              backup_button.disabled = true
+              backup_button.pressed.connect(open_backup)
+              city.add_child(backup_button)
+              # The city rebuilds its layout even when Book is tapped twice.
+              city.compact_nav[6].pressed.connect(invalidate_integration_layout)
+              city.resized.connect(invalidate_integration_layout)
+
+              var layer := CanvasLayer.new()
+              add_child(layer)
+              backup_panel = ColorRect.new()
+              backup_panel.color = Color("#183d4b")
+              backup_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+              layer.add_child(backup_panel)
+              backup_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+              backup_heading = Label.new()
+              backup_heading.text = "CITY BACKUP  /  Restore saved progress"
+              backup_heading.position = Vector2(100, 95)
+              backup_heading.add_theme_font_size_override("font_size", 30)
+              backup_panel.add_child(backup_heading)
+              backup_help = Label.new()
+              backup_help.text = "Export JSON and copy it somewhere safe. Paste a backup and preview it.\nReplacement keeps your last confirmed city as a recovery copy."
+              backup_help.autowrap_mode = TextServer.AUTOWRAP_OFF
+              backup_help.add_theme_font_size_override("font_size", 18)
+              backup_panel.add_child(backup_help)
+              backup_help.position = Vector2(100, 145)
+              backup_help.size = Vector2(900, 62)
+              backup_text = TextEdit.new()
+              backup_text.position = Vector2(100, 235)
+              backup_text.size = Vector2(900, 335)
+              # Isolate line wrapping from the measured large portable JSON assignment stall.
+              # Keep complete editable/copyable data, exact preview/restore and all timeouts.
+              backup_text.wrap_mode = TextEdit.LINE_WRAPPING_NONE
+              backup_text.placeholder_text = "Exported or pasted portable city JSON"
+              backup_text.text_changed.connect(backup_input_changed)
+              backup_panel.add_child(backup_text)
+              backup_message = Label.new()
+              backup_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+              backup_message.add_theme_font_size_override("font_size", 18)
+              backup_panel.add_child(backup_message)
+              backup_message.position = Vector2(100, 585)
+              backup_message.size = Vector2(900, 80)
+              backup_export = backup_control("Export to text", 100, export_backup_text)
+              backup_preview = backup_control("Preview import", 330, preview_backup_text)
+              backup_restore = backup_control("Confirm replacement", 560, restore_backup_text)
+              backup_close = backup_control("Back to city", 790, close_backup)
+              backup_restore.disabled = true
+              # Compact body uses Godot's actual wrapped-label minimum sizes.
+              # Buttons remain outside the scroll region and never shrink.
+              backup_body = ScrollContainer.new()
+              backup_body.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+              backup_body.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+              backup_body.follow_focus = true
+              backup_panel.add_child(backup_body)
+              backup_stack = VBoxContainer.new()
+              backup_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+              backup_stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
+              backup_stack.add_theme_constant_override("separation", 8)
+              backup_body.add_child(backup_stack)
+              backup_body.hide()
+              backup_panel.hide()
+
+          func backup_control(label: String, x: int, action: Callable) -> Button:
+              var button := Button.new()
+              button.text = label
+              button.position = Vector2(x, 680)
+              button.size = Vector2(210, 52)
+              button.add_theme_font_size_override("font_size", 17)
+              button.pressed.connect(action)
+              backup_panel.add_child(button)
+              return button
+
+          func backup_open_feedback(message: String) -> void:
+              city.status_label.text = message
+              city.sync_compact_messages()
+
+          func open_backup() -> void:
+              # A periodic save can begin between button-down and pressed.
+              var phase: String = session.status()
+              backup_open_attempt = {"phase": phase, "confirmed": city.profile_confirmed,
+                  "invalid": city.profile_view_invalid, "outcome": "refused"}
+              if not city.profile_confirmed or city.profile_view_invalid or phase not in ["ready", "saving"]:
+                  backup_open_feedback("Backup unavailable · wait for a confirmed save or reload.")
+                  return
+              if phase == "saving":
+                  backup_open_pending = true
+                  backup_open_attempt["outcome"] = "waiting"
+                  backup_open_feedback("Opening backup after the current save is confirmed…")
+                  return
+              show_confirmed_backup()
+
+          func show_confirmed_backup() -> void:
+              # Never suspend the city's acknowledgement path during a write.
+              if session.status() != "ready" or not city.profile_confirmed or city.profile_view_invalid:
+                  return
+              backup_open_pending = false
+              backup_open_attempt["outcome"] = "opened"
+              var focus := get_viewport().gui_get_focus_owner()
+              if focus != null:
+                  focus.release_focus()
+              city.process_mode = Node.PROCESS_MODE_DISABLED
+              backup_panel.show()
+              backup_text.editable = true
+              backup_export.disabled = false
+              backup_preview.disabled = false
+              backup_close.disabled = false
+              invalidate_backup_preview()
+              # Opening a modal on touch must not summon the soft keyboard.
+              if not city.compact_mode:
+                  backup_text.grab_focus()
+              else:
+                  backup_body.scroll_vertical = 0
+
+          func backup_input_changed() -> void:
+              # A programmatic export may emit a deferred text_changed signal.
+              # Only invalidate a live preview; do not overwrite export feedback.
+              if not backup_confirmation.is_empty():
+                  invalidate_backup_preview()
+
+          func invalidate_backup_preview() -> void:
+              backup_confirmation = ""
+              backup_restore.disabled = true
+              if not restore_pending:
+                  backup_message.text = "Preview is required before replacement."
+
+          # Test-only phase markers; never log the portable data itself.
+          func export_trace(stage: String, count: int = -1) -> void:
+              if diagnostic_window == null:
+                  return
+              var marker := "LR_EXPORT_TRACE stage=%s ticks_ms=%d chars=%d" % [stage, Time.get_ticks_msec(), count]
+              print(marker)
+              JavaScriptBridge.eval("console.error(" + JSON.stringify(marker) + ")")
+
+          func export_backup_text() -> void:
+              export_trace("before_serialization")
+              var encoded: String = session.export_backup()
+              export_trace("after_serialization", encoded.length())
+              invalidate_backup_preview()
+              if encoded.is_empty():
+                  backup_message.text = "No confirmed backup available."
+                  return
+              export_trace("before_text_assignment", encoded.length())
+              backup_text.text = encoded
+              export_trace("after_text_assignment", encoded.length())
+              backup_message.text = "Confirmed backup exported to text. Select and copy it somewhere safe."
+              if diagnostic_window != null:
+                  get_tree().process_frame.connect(func(): export_trace("next_process_frame"), CONNECT_ONE_SHOT)
+
+          func preview_backup_text() -> void:
+              invalidate_backup_preview()
+              var result: Dictionary = session.preview_backup(backup_text.text)
+              if not result.get("ok", false):
+                  backup_message.text = str(result.get("reason", "Invalid backup."))
+                  return
+              backup_confirmation = str(result.get("confirmation", ""))
+              backup_restore.disabled = backup_confirmation.is_empty()
+              backup_message.text = "Replace current city with: %d Gold, %d Food, %d XP, %d rays (revision %d)? This replaces progress; the previous save is retained." % [result.gold, result.food, result.xp, result.individual_count, result.domain_revision]
+              if city.compact_mode:
+                  backup_body.call_deferred("ensure_control_visible", backup_message)
+
+          func restore_backup_text() -> void:
+              if restore_pending or backup_confirmation.is_empty():
+                  return
+              var token: String = backup_confirmation
+              invalidate_backup_preview()
+              var now := Time.get_ticks_msec()
+              if not session.stage_restore(backup_text.text, token, int(Time.get_unix_time_from_system() * 1000.0)):
+                  city.update_profile_display()
+                  backup_message.text = "Replacement not queued. Preview again or reload if storage is unavailable."
+                  if session.status() != "ready":
+                      backup_export.disabled = true
+                      backup_preview.disabled = true
+                  return
+              # Explicit replacement starts a new local elapsed sample. On cancel,
+              # the old sample is unchanged, so the next tick settles time spent here.
+              city.last_ms = now
+              city.profile_pending_kind = "backup_restore"
+              city.update_profile_display()
+              restore_pending = true
+              backup_text.editable = false
+              backup_export.disabled = true
+              backup_preview.disabled = true
+              backup_close.disabled = true
+              backup_message.text = "Saving replacement… wait for confirmed storage."
+
+          func close_backup() -> void:
+              if restore_pending:
+                  return
+              backup_text.release_focus()
+              backup_panel.hide()
+              backup_confirmation = ""
+              city.process_mode = Node.PROCESS_MODE_INHERIT
+
+          func process_backup() -> void:
+              var phase: String = session.status()
+              if backup_open_pending:
+                  if not city.profile_confirmed or city.profile_view_invalid or phase not in ["ready", "saving"]:
+                      backup_open_pending = false
+                      backup_open_attempt["outcome"] = "failed"
+                      backup_open_feedback("Backup unavailable · save not confirmed. Reload to reconcile.")
+                  elif city.compact_mode and city.compact_page != 6:
+                      backup_open_pending = false
+                      backup_open_attempt["outcome"] = "canceled"
+                      backup_open_feedback("Backup opening canceled.")
+                  elif phase == "ready":
+                      show_confirmed_backup()
+              # Accept a request during a save, but open only after acknowledgement.
+              backup_button.disabled = backup_open_pending or phase not in ["ready", "saving"] or not city.profile_confirmed or city.profile_view_invalid
+              if not restore_pending:
+                  if backup_panel.visible and phase != "ready":
+                      backup_confirmation = ""
+                      backup_restore.disabled = true
+                      backup_export.disabled = true
+                      backup_preview.disabled = true
+                      backup_message.text = "Save unavailable. Close and reload to reconcile."
+                  return
+              # Use the existing city acknowledgement path while ordinary city input
+              # and auto-checkpointing are suspended. Do not publish speculative state.
+              city.process_profile(Time.get_ticks_msec(), int(Time.get_unix_time_from_system() * 1000.0))
+              if session.status() == "saving":
+                  return
+              restore_pending = false
+              backup_close.disabled = false
+              if session.status() == "ready" and not city.profile_view_invalid:
+                  city.cancel_map_preview()
+                  city.name_edit.text = str(city.city.individuals[city.selected_ray]["nickname"])
+                  city.status_label.text = "Backup restored."
+                  backup_message.text = "Backup restored."
+                  backup_text.editable = true
+                  backup_export.disabled = false
+                  backup_preview.disabled = false
+              else:
+                  backup_message.text = "Save unavailable. Close and reload to reconcile; replacement outcome is not confirmed."
+
+          # Recovery is separate from portable import: never show a blank city
+          # or resume the old writer after the transport replaces the raw pair.
+          func setup_recovery_ui() -> void:
+              var layer := CanvasLayer.new()
+              layer.layer = 2
+              add_child(layer)
+              recovery_panel = ColorRect.new()
+              recovery_panel.color = Color("#183d4b")
+              recovery_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+              layer.add_child(recovery_panel)
+              recovery_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+              recovery_heading = Label.new()
+              recovery_heading.text = "Recover your saved city"
+              recovery_heading.position = Vector2(100, 100)
+              recovery_heading.add_theme_font_size_override("font_size", 34)
+              recovery_panel.add_child(recovery_heading)
+              recovery_message = Label.new()
+              recovery_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+              recovery_message.position = Vector2(100, 205)
+              recovery_message.size = Vector2(900, 360)
+              recovery_message.add_theme_font_size_override("font_size", 24)
+              recovery_panel.add_child(recovery_message)
+              recovery_confirm = Button.new()
+              recovery_confirm.text = "Restore previous city"
+              recovery_confirm.position = Vector2(100, 650)
+              recovery_confirm.size = Vector2(400, 70)
+              recovery_confirm.add_theme_font_size_override("font_size", 21)
+              recovery_confirm.pressed.connect(confirm_recovery)
+              recovery_panel.add_child(recovery_confirm)
+              recovery_reload = Button.new()
+              recovery_reload.text = "Reload page"
+              recovery_reload.position = Vector2(600, 650)
+              recovery_reload.size = Vector2(400, 70)
+              recovery_reload.add_theme_font_size_override("font_size", 21)
+              recovery_reload.pressed.connect(reload_recovery)
+              recovery_panel.add_child(recovery_reload)
+              # Keep the entire warning scrollable, never behind the fixed actions.
+              recovery_body = ScrollContainer.new()
+              recovery_body.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+              recovery_body.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+              recovery_body.focus_mode = Control.FOCUS_ALL
+              recovery_body.follow_focus = true
+              recovery_panel.add_child(recovery_body)
+              recovery_stack = VBoxContainer.new()
+              recovery_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+              recovery_stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
+              recovery_body.add_child(recovery_stack)
+              recovery_body.hide()
+              recovery_panel.hide()
+
+
+          # Integration owns these controls. Reuse the city's existing Book page
+          # rather than covering map or navigation controls at compact sizes.
+          # All modal coordinates use unscaled viewport units; desktop is unchanged.
+          func place_control(control: Control, x: float, y: float, w: float, h: float) -> void:
+              control.position = Vector2(x, y)
+              control.size = Vector2(w, h)
+
+          func use_backup_body(compact: bool) -> void:
+              # Reparent only when crossing the desktop/compact breakpoint.
+              # Preserve the same TextEdit, confirmation and signal connections.
+              var target: Node = backup_stack if compact else backup_panel
+              var controls: Array[Control] = [backup_help, backup_text, backup_message]
+              for control in controls:
+                  if control.get_parent() != target:
+                      control.reparent(target, false)
+                  control.custom_minimum_size = Vector2.ZERO
+                  control.size_flags_horizontal = Control.SIZE_FILL
+                  control.size_flags_vertical = Control.SIZE_FILL
+              backup_body.visible = compact
+
+          func use_recovery_body(compact: bool) -> void:
+              var target: Node = recovery_stack if compact else recovery_panel
+              if recovery_message.get_parent() != target:
+                  recovery_message.reparent(target, false)
+              recovery_message.custom_minimum_size = Vector2.ZERO
+              recovery_message.size_flags_horizontal = Control.SIZE_FILL
+              recovery_message.size_flags_vertical = Control.SIZE_FILL
+              recovery_body.visible = compact
+
+          func invalidate_integration_layout() -> void:
+              integration_layout_key = ""
+
+          # Use the pinned city's existing overflow container, not a city-root
+          # coordinate derived from a control that may already be reparented.
+          func layout_book_backup(w: float) -> void:
+              var sale: Rect2 = city.sell_button.get_rect()
+              var parent: Node = city.sell_button.get_parent()
+              if backup_button.get_parent() != parent:
+                  backup_button.reparent(parent, false)
+              var x: float = sale.end.x + 8.0 if w >= 580.0 else sale.position.x
+              var y: float = sale.position.y if w >= 580.0 else sale.position.y + 56.0
+              city.compact_place(backup_button, x, y, sale.size.x, 48.0)
+              if parent == city.compact_scroll_content:
+                  var minimum: Vector2 = city.compact_scroll_content.custom_minimum_size
+                  minimum.y = maxf(minimum.y, ceilf(backup_button.get_rect().end.y) + 4.0)
+                  city.compact_scroll_content.custom_minimum_size = minimum
+              else:
+                  var top: float = city.goal_label.position.y + 40.0
+                  var bottom: float = city.compact_status.position.y - 6.0
+                  city.fit_compact_actions([city.collection_info, city.sale_note, city.collection_button,
+                      city.favorite_button, city.sell_button, backup_button], Rect2(8, top, w, bottom - top))
+
+          func layout_integration_ui() -> void:
+              var viewport: Vector2 = city.size
+              var compact: bool = city.compact_mode
+              var key := "%s/%s/%s" % [viewport, compact, city.compact_page]
+              if key == integration_layout_key:
+                  return
+              integration_layout_key = key
+              var w: float = viewport.x - 16.0
+              var h: float = viewport.y
+              var actions: Array[Button] = [backup_export, backup_preview, backup_restore, backup_close]
+              use_backup_body(compact)
+              use_recovery_body(compact)
+              if not compact:
+                  backup_button.text = "City backup / restore"
+                  backup_button.clip_text = false
+                  backup_button.show()
+                  place_control(backup_button, 800, 607, 268, 44)
+                  backup_heading.text = "CITY BACKUP  /  Restore saved progress"
+                  backup_heading.add_theme_font_size_override("font_size", 30)
+                  place_control(backup_heading, 100, 95, 900, 40)
+                  backup_help.autowrap_mode = TextServer.AUTOWRAP_OFF
+                  backup_help.add_theme_font_size_override("font_size", 18)
+                  place_control(backup_help, 100, 145, 900, 62)
+                  place_control(backup_text, 100, 235, 900, 335)
+                  backup_message.add_theme_font_size_override("font_size", 18)
+                  place_control(backup_message, 100, 585, 900, 80)
+                  for i in range(actions.size()):
+                      actions[i].clip_text = false
+                      actions[i].add_theme_font_size_override("font_size", 17)
+                      place_control(actions[i], 100 + 230 * i, 680, 210, 52)
+                  recovery_heading.add_theme_font_size_override("font_size", 34)
+                  place_control(recovery_heading, 100, 100, 900, 44)
+                  recovery_message.add_theme_font_size_override("font_size", 24)
+                  place_control(recovery_message, 100, 205, 900, 360)
+                  recovery_confirm.add_theme_font_size_override("font_size", 21)
+                  recovery_reload.add_theme_font_size_override("font_size", 21)
+                  place_control(recovery_confirm, 100, 650, 400, 70)
+                  place_control(recovery_reload, 600, 650, 400, 70)
+                  return
+              backup_button.text = "Backup / restore"
+              backup_button.clip_text = true
+              backup_button.visible = city.compact_page == 6
+              if backup_button.visible:
+                  layout_book_backup(w)
+              backup_heading.text = "City backup / restore"
+              backup_heading.add_theme_font_size_override("font_size", 20)
+              place_control(backup_heading, 8, 8, w, 28)
+              backup_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+              backup_help.add_theme_font_size_override("font_size", 14)
+              var columns: int = 4 if w >= 740.0 else 2
+              var rows: int = 1 if columns == 4 else 2
+              var button_width: float = floorf((w - 8.0 * (columns - 1)) / columns)
+              var actions_top: float = h - 8.0 - (48.0 * rows + 8.0 * (rows - 1))
+              # VBox measures wrapped text rather than assuming a fixed height.
+              # The input takes spare height; when minimums exceed the budget,
+              # the body scrolls instead of overlapping the fixed action row.
+              backup_help.custom_minimum_size = Vector2(0, 52.0 if w >= 740.0 else 72.0)
+              backup_text.custom_minimum_size = Vector2(0, 48)
+              backup_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+              backup_message.add_theme_font_size_override("font_size", 14)
+              backup_message.custom_minimum_size = Vector2(0, 102)
+              place_control(backup_body, 8, 42, w, maxf(1.0, actions_top - 50.0))
+              for i in range(actions.size()):
+                  actions[i].clip_text = true
+                  actions[i].add_theme_font_size_override("font_size", 14)
+                  place_control(actions[i], 8.0 + (i % columns) * (button_width + 8.0), actions_top + floori(float(i) / columns) * 56.0, button_width, 48)
+              recovery_heading.add_theme_font_size_override("font_size", 20)
+              place_control(recovery_heading, 8, 8, w, 30)
+              var recovery_rows: int = 1 if w >= 580.0 else 2
+              var recovery_top: float = h - 8.0 - (48.0 * recovery_rows + 8.0 * (recovery_rows - 1))
+              recovery_message.add_theme_font_size_override("font_size", 16)
+              place_control(recovery_body, 8, 46, w, maxf(1.0, recovery_top - 54.0))
+              recovery_confirm.add_theme_font_size_override("font_size", 16)
+              recovery_reload.add_theme_font_size_override("font_size", 16)
+              if recovery_rows == 1:
+                  var half: float = floorf((w - 8.0) / 2.0)
+                  place_control(recovery_confirm, 8, recovery_top, half, 48)
+                  place_control(recovery_reload, 16.0 + half, recovery_top, half, 48)
+              else:
+                  place_control(recovery_confirm, 8, recovery_top, w, 48)
+                  place_control(recovery_reload, 8, recovery_top + 56.0, w, 48)
+
+          func control_geometry(control: Control) -> Dictionary:
+              var rect: Rect2 = control.get_global_rect()
+              return {"rect": [rect.position.x, rect.position.y, rect.size.x, rect.size.y],
+                  "visible": control.is_visible_in_tree(),
+                  "minimum": [control.get_combined_minimum_size().x, control.get_combined_minimum_size().y]}
+
+          func confirm_recovery() -> void:
+              if recovery_confirmation.is_empty():
+                  return
+              var token: String = recovery_confirmation
+              recovery_confirmation = ""
+              recovery_confirm.disabled = true
+              session.stage_recovery(token, int(Time.get_unix_time_from_system() * 1000.0))
+              process_recovery()
+
+          func reload_recovery() -> void:
+              if session.status() != "recovering" and OS.has_feature("web"):
+                  JavaScriptBridge.eval("location.reload()")
+
+          func process_recovery() -> void:
+              var phase: String = session.status()
+              if phase == "recovery-required":
+                  if not recovery_panel.visible:
+                      var preview: Dictionary = session.preview_recovery()
+                      if not preview.get("ok", false):
+                          return
+                      recovery_confirmation = str(preview.confirmation)
+                      recovery_message.text = "The latest save is damaged. A validated earlier city is available.\n\n%d Gold · %d Food · %d XP · %d rays\nSaved revision %d\n\nRestoring may lose newer progress. The original damaged records will be archived. No changes occur until you confirm." % [preview.gold, preview.food, preview.xp, preview.individual_count, preview.domain_revision]
+                      recovery_panel.show()
+                      recovery_body.scroll_vertical = 0
+                      recovery_reload.grab_focus()
+                  recovery_confirm.disabled = recovery_confirmation.is_empty()
+                  recovery_reload.disabled = false
+              elif phase == "recovering":
+                  recovery_panel.show()
+                  recovery_confirm.disabled = true
+                  recovery_reload.disabled = true
+                  recovery_message.text = "Recovering previous city… wait for storage confirmation."
+                  session.poll(int(Time.get_unix_time_from_system() * 1000.0))
+              elif recovery_panel.visible:
+                  recovery_confirm.disabled = true
+                  recovery_reload.disabled = false
+                  recovery_message.text = "Previous city recovered. Reload to open it." if phase == "recovered" else "Recovery was not confirmed. Reload to reconcile; do not assume the save changed."
+
+          func mark_down(kind: String) -> void:
+              downs[kind] += 1
+
+          func mark_pressed(kind: String) -> void:
+              presses[kind] += 1
+
+          func _process(_delta: float) -> void:
+              if backup_panel != null and recovery_panel != null:
+                  layout_integration_ui()
+              if backup_panel != null:
+                  process_backup()
+              if recovery_panel != null:
+                  process_recovery()
+              if diagnostic_window == null:
+                  return
+              var starter_marker: Rect2 = city.gold_marker_targets().get("tide-1", Rect2())
+              var nav_geometry: Array = []
+              for tab in city.compact_nav:
+                  nav_geometry.append(control_geometry(tab))
+              diagnostic_window.arch002CityState = JSON.stringify({
+                  "phase": session.status(), "confirmed": city.profile_confirmed,
+                  "invalid": city.profile_view_invalid, "overlay": city.profile_overlay.visible,
+                  "tick_age_ms": Time.get_ticks_msec() - city.last_ms,
+                  "ready_age_ms": Time.get_ticks_msec() - city.profile_ready_since_ms,
+                  "domain_revision": city.city.revision, "pending_kind": city.profile_pending_kind,
+                  "status": city.status_label.text, "footer": city.profile_footer.text,
+                  "backup_open": backup_panel.visible, "backup_message": backup_message.text,
+                  "backup_open_pending": backup_open_pending, "backup_open_attempt": backup_open_attempt,
+                  "recovery_open": recovery_panel.visible, "recovery_message": recovery_message.text,
+                  "recovery_confirm_disabled": recovery_confirm.disabled,
+                  "backup_restore_disabled": backup_restore.disabled,
+                  "backup_help_bounds_ok": backup_panel.get_global_rect().encloses(backup_help.get_global_rect()) and backup_help.get_global_rect().end.y <= backup_text.get_global_rect().position.y,
+                  "backup_message_bounds_ok": backup_panel.get_global_rect().encloses(backup_message.get_global_rect()) and backup_message.get_global_rect().end.y <= backup_restore.get_global_rect().position.y,
+                  "backup_layout_rects": {"panel": str(backup_panel.get_global_rect()), "help": str(backup_help.get_global_rect()), "help_minimum": str(backup_help.get_combined_minimum_size()), "input": str(backup_text.get_global_rect()), "message": str(backup_message.get_global_rect()), "message_minimum": str(backup_message.get_combined_minimum_size()), "confirm": str(backup_restore.get_global_rect())},
+                  "downs": downs, "presses": presses,
+                  "disabled": {"plant": city.plant_short.disabled, "feed": city.feed_button.disabled, "collect": city.collect_button.disabled, "harvest": city.harvest_button.disabled, "backup": backup_button.disabled},
+                  "rects": {"plant": str(city.plant_short.get_global_rect()), "feed": str(city.feed_button.get_global_rect()), "collect": str(city.collect_button.get_global_rect()), "harvest": str(city.harvest_button.get_global_rect())},
+                  "viewport": str(city.get_viewport_rect().size),
+                  "viewport_size": [city.size.x, city.size.y], "compact_page": city.compact_page,
+                  "starter_marker": [starter_marker.position.x, starter_marker.position.y, starter_marker.size.x, starter_marker.size.y],
+                  "starter_bin": city.city.stored_gold("tide-1"), "map_nav_geometry": nav_geometry,
+                  "book_scroll_offset": city.compact_scroll.scroll_vertical,
+                  "backup_scroll_offset": backup_body.scroll_vertical,
+                  "recovery_scroll_offset": recovery_body.scroll_vertical,
+                  "layout_controls": {"book_tab": control_geometry(city.compact_nav[6]),
+                      "collection": control_geometry(city.collection_button), "favorite": control_geometry(city.favorite_button),
+                      "sale": control_geometry(city.sell_button), "backup": control_geometry(backup_button),
+                      "book_scroll": control_geometry(city.compact_scroll),
+                      "status_band": control_geometry(city.compact_status), "save_band": control_geometry(city.compact_save),
+                      "backup_body": control_geometry(backup_body), "map_tab": control_geometry(city.compact_nav[0]),
+                      "backup_heading": control_geometry(backup_heading), "help": control_geometry(backup_help),
+                      "input": control_geometry(backup_text), "message": control_geometry(backup_message),
+                      "export": control_geometry(backup_export), "preview": control_geometry(backup_preview),
+                      "restore": control_geometry(backup_restore), "close": control_geometry(backup_close),
+                      "recovery_heading": control_geometry(recovery_heading), "recovery_message": control_geometry(recovery_message),
+                      "recovery_body": control_geometry(recovery_body),
+                      "recover": control_geometry(recovery_confirm), "reload": control_geometry(recovery_reload)}})
+          GD
+          cat > "$project/arch002_city_entry.tscn" <<'SCENE'
+          [gd_scene load_steps=2 format=3]
+
+          [ext_resource type="Script" path="res://arch002_city_entry.gd" id="1"]
+
+          [node name="PersistentCity" type="Node"]
+          script = ExtResource("1")
+          SCENE
+          sed -i 's|run/main_scene="res://main.tscn"|run/main_scene="res://arch002_city_entry.tscn"|' "$project/project.godot"
+          grep -Fx 'run/main_scene="res://arch002_city_entry.tscn"' "$project/project.godot"
+          out="$RUNNER_TEMP/arch002-persistent-city"
+          mkdir -p "$out"
+          timeout 90s "$editor" --headless --path "$project" --editor --import
+          timeout 90s "$editor" --headless --path "$project" --export-release Web "$out/index.html"
+          # Classic external script executes synchronously before the generated
+          # engine loader; reuse the exact transport implementation, not a fork.
+          python3 - "$out" <<'PY'
+          import hashlib, json, pathlib, re, subprocess, sys
+          out = pathlib.Path(sys.argv[1])
+          transport = pathlib.Path("spikes/web_delivery/profile_transport.js").read_text()
+          classic, count = re.subn(r"(?m)^export (?=(?:async )?function )", "", transport)
+          assert count == 3 and not re.search(r"(?m)^\s*(?:import|export)\s", classic)
+          (out / "profile-boot.js").write_text(
+              '"use strict";\n' + classic +
+              '\nwindow.littleRayCityProfilePort = createGodotProfilePort(() => openProfileSession("little-ray-city-checkpoint-v2"));\n')
+          index = out / "index.html"
+          html = index.read_text()
+          assert html.count("</head>") == 1 and "profile-boot.js" not in html
+          index.write_text(html.replace("</head>", '<script src="profile-boot.js"></script>\n</head>', 1))
+          files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in out.iterdir() if p.is_file()}
+          assert "index.wasm" in files and "index.pck" in files
+          (out / "integration-manifest.json").write_text(json.dumps({
+              "architect_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "city_commit": subprocess.check_output(["git", "-C", ".arch002-city-source", "rev-parse", "HEAD"], text=True).strip(),
+              "sha256": files, "actual_site_verified": False}, indent=2))
+          PY
+      - name: Exercise real city controls and reload in Chromium
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, functools, http.server, json, os, pathlib, subprocess
+          import tempfile, threading, time, urllib.request
+
+          root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "arch002-persistent-city"
+          server = http.server.ThreadingHTTPServer(("127.0.0.1", 0),
+              functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root)))
+          threading.Thread(target=server.serve_forever, daemon=True).start()
+          url = f"http://127.0.0.1:{server.server_port}/index.html?arch002_test=1"
+          driver = subprocess.Popen(["chromedriver", "--port=9516"])
+          session = None
+          evidence = root.parent / "arch002-city-browser-evidence"
+          evidence.mkdir(exist_ok=True)
+          def api(method, path, data=None):
+              req = urllib.request.Request("http://127.0.0.1:9516" + path,
+                  data=None if data is None else json.dumps(data).encode(),
+                  headers={"Content-Type": "application/json"}, method=method)
+              with urllib.request.urlopen(req, timeout=35) as response:
+                  return json.load(response)["value"]
+          def wait(fn, label, seconds=35):
+              end = time.monotonic() + seconds
+              while time.monotonic() < end:
+                  result = fn()
+                  if result:
+                      return result
+                  time.sleep(.15)
+              raise AssertionError("Timed out: " + label)
+          def driver_ready():
+              try:
+                  return api("GET", "/status").get("ready")
+              except OSError:
+                  return False
+          def js(source):
+              return api("POST", session + "/execute/sync", {"script": source, "args": []})
+          def clipboard_call(script, args=()):
+              result = api("POST", session + "/execute/async", {"args": list(args), "script": script + """
+                const done = arguments[arguments.length - 1];
+                operation.then(value => done({ok:true,value}), error => done({ok:false,error:String(error)}));
+              """})
+              assert result["ok"], "Browser clipboard API failed: " + result.get("error", "")
+              return result.get("value")
+          def clipboard_read():
+              return clipboard_call("const operation = navigator.clipboard.readText();")
+          def clipboard_write(text):
+              clipboard_call("const operation = navigator.clipboard.writeText(arguments[0]);", (text,))
+          def key_press(key, control=False):
+              keys = ([{"type":"keyDown","value":"\uE009"}] if control else [])
+              keys += [{"type":"keyDown","value":key},{"type":"pause","duration":100},{"type":"keyUp","value":key}]
+              if control:
+                  keys += [{"type":"keyUp","value":"\uE009"}]
+              api("POST", session + "/actions", {"actions":[{"type":"key","id":"backup-keyboard","actions":keys}]})
+          def copy_backup(sentinel):
+              # Seed only a sentinel, never the expected backup; the game must
+              # populate the actual browser clipboard via user keyboard input.
+              clipboard_write(sentinel)
+              assert clipboard_read() == sentinel, "Clipboard sentinel did not round-trip"
+              compact_click("input")
+              key_press("a", control=True)
+              key_press("c", control=True)
+              def copied():
+                  value = clipboard_read()
+                  return value if value and value != sentinel else None
+              return wait(copied, "Godot copied full backup into browser clipboard", 15)
+          def saved():
+              result = api("POST", session + "/execute/async", {"args": [], "script": """
+                const done = arguments[arguments.length - 1];
+                (async () => {
+                  const name = "little-ray-city-checkpoint-v2";
+                  if (!(await indexedDB.databases()).some(x => x.name === name)) return null;
+                  const db = await new Promise((ok, bad) => {
+                    const r = indexedDB.open(name); r.onsuccess = () => ok(r.result);
+                    r.onerror = () => bad(r.error); r.onupgradeneeded = () => r.transaction.abort();
+                  });
+                  try {
+                    return await new Promise((ok, bad) => {
+                      const t = db.transaction("profiles", "readonly");
+                      const a = t.objectStore("profiles").get("active");
+                      const p = t.objectStore("profiles").get("previous");
+                      t.oncomplete = () => ok(a.result === undefined ? null :
+                        {active: JSON.parse(a.result), previous: p.result === undefined ? null : JSON.parse(p.result)});
+                      t.onabort = () => bad(t.error); t.onerror = () => bad(t.error);
+                    });
+                  } finally { db.close(); }
+                })().then(done, e => done({error: String(e)}));
+              """})
+              if result and "error" in result:
+                  raise AssertionError(result)
+              return result
+          # Test-only fault injection. The live Godot writer must be unloaded
+          # before corruption; inspect raw bytes rather than parsing bad JSON.
+          def raw_city_pair(corrupt_active=False, replacement=None):
+              result = api("POST", session + "/execute/async", {"args": [corrupt_active, replacement], "script": """
+                const corrupt = arguments[0], replacement = arguments[1], done = arguments[arguments.length - 1];
+                (async () => {
+                  const name = "little-ray-city-checkpoint-v2";
+                  const db = await new Promise((ok, bad) => {
+                    const r = indexedDB.open(name);
+                    r.onsuccess = () => ok(r.result);
+                    r.onerror = () => bad(r.error);
+                    r.onupgradeneeded = () => r.transaction.abort();
+                  });
+                  try {
+                    return await new Promise((ok, bad) => {
+                      const t = db.transaction("profiles", corrupt || replacement ? "readwrite" : "readonly");
+                      const store = t.objectStore("profiles");
+                      const a = store.get("active"), p = store.get("previous"), archive = store.get("recovery-original");
+                      const archiveKey = store.getKey("recovery-original");
+                      const badText = '{"fault":';
+                      let original;
+                      p.onsuccess = () => {
+                        original = {active: a.result, previous: p.result};
+                        if (typeof original.active !== "string" || typeof original.previous !== "string") {
+                          t.abort(); return;
+                        }
+                        if (replacement) {
+                          store.put(replacement.active, "active");
+                          store.put(replacement.previous, "previous");
+                        } else if (corrupt) store.put(badText, "active");
+                      };
+                      t.oncomplete = () => ok({original, archive: archive.result ?? null, archivePresent: archiveKey.result !== undefined, observed: replacement || {
+                        active: corrupt ? badText : original.active, previous: original.previous}});
+                      t.onabort = () => bad(t.error || new Error("Missing recovery pair"));
+                      t.onerror = () => bad(t.error);
+                    });
+                  } finally { db.close(); }
+                })().then(done, e => done({error: String(e)}));
+              """})
+              assert result and "error" not in result, result
+              return result
+
+          def bounds():
+              return js("const c=document.querySelector('canvas'); return c && c.width && !document.getElementById('status') ? c.getBoundingClientRect().toJSON() : null;")
+          trace = []
+          def view():
+              return js("return window.arch002CityState ? JSON.parse(window.arch002CityState) : null;")
+          readiness_polls = []
+          def ready(kind):
+              state = view()
+              # Opening Backup is read-only; its handler defers during an in-flight save.
+              # Economic actions still require a fresh acknowledgement, with no retries.
+              eligible = bool(state and state["phase"] == "ready" and state["confirmed"] and not state["invalid"] and not state["overlay"] and not state["disabled"][kind] and (kind == "backup" or 0 <= state["ready_age_ms"] < 300))
+              poll = {"kind": kind, "monotonic": time.monotonic(), "eligible": eligible}
+              if state:
+                  poll.update({k: state.get(k) for k in ("phase", "confirmed", "invalid", "overlay", "ready_age_ms", "tick_age_ms", "backup_open_pending", "domain_revision")})
+                  poll["disabled"] = state["disabled"][kind]
+              readiness_polls.append(poll)
+              del readiness_polls[:-128]
+              (evidence / "readiness-polls.json").write_text(json.dumps(readiness_polls, indent=2))
+              return state if eligible else None
+          def record(label):
+              item = {"label": label, "view": view(), "canvas": bounds(), "saved": saved()}
+              trace.append(item)
+              (evidence / "input-trace.json").write_text(json.dumps(trace, indent=2))
+              print(json.dumps({"input_trace": label, "view": item["view"], "canvas": item["canvas"]}), flush=True)
+          def click(kind, x, y):
+              b = wait(bounds, "city canvas")
+              def pointer(actions):
+                  api("POST", session + "/actions", {"actions": [{"type":"pointer","id":"mouse",
+                      "parameters":{"pointerType":"mouse"},"actions":actions}]})
+              pointer([{"type":"pointerMove","duration":50,"origin":"viewport",
+                        "x":round(b["x"]+b["width"]*x/1100),"y":round(b["y"]+b["height"]*y/880)}])
+              record(kind + "-before")
+              capture(kind + "-before")
+              before = wait(lambda: ready(kind), "confirmed enabled UI: " + kind, 15)
+              # Allow several Godot frames between mouse-down and mouse-up.
+              # Only one click per economic action, never retry an uncertain effect.
+              pointer([{"type":"pointerDown","button":0},{"type":"pause","duration":80},{"type":"pointerUp","button":0}])
+              capture(kind + "-after-click")
+              record(kind + "-after-click")
+              wait(lambda: (v if (v := view()) and v["presses"][kind] == before["presses"][kind] + 1 else None),
+                   "Godot pressed signal: " + kind, 5)
+          def modal_click(x, y):
+              b = wait(bounds, "backup canvas")
+              api("POST", session + "/actions", {"actions": [{"type":"pointer","id":"mouse",
+                  "parameters":{"pointerType":"mouse"},"actions":[
+                      {"type":"pointerMove","duration":50,"origin":"viewport",
+                       "x":round(b["x"]+b["width"]*x/1100),"y":round(b["y"]+b["height"]*y/880)},
+                      {"type":"pointerDown","button":0},{"type":"pause","duration":80},
+                      {"type":"pointerUp","button":0}]}]})
+
+          def compact_geometry(names, buttons=()):
+              v = view()
+              b = bounds()
+              assert v and b, (v, b)
+              width, height = v["viewport_size"]
+              sx, sy = b["width"]/width, b["height"]/height
+              boxes = {}
+              for name in names:
+                  g = v["layout_controls"][name]
+                  x, y, w, h = g["rect"]
+                  assert g["visible"] and x >= 0 and y >= 0 and x+w <= width+.01 and y+h <= height+.01, (name, g, width, height)
+                  assert w >= g["minimum"][0]-.01 and h >= g["minimum"][1]-.01, (name, g)
+                  if name in buttons:
+                      assert w*sx >= 44 and h*sy >= 44, (name, g, sx, sy)
+                  boxes[name] = (x,y,w,h)
+              for index, (a, (x,y,w,h)) in enumerate(boxes.items()):
+                  for n, (xx,yy,ww,hh) in list(boxes.items())[index+1:]:
+                      assert min(x+w,xx+ww) <= max(x,xx) or min(y+h,yy+hh) <= max(y,yy), (a,n,boxes)
+              return boxes
+          def encloses(outer, inner):
+              x,y,w,h = outer
+              xx,yy,ww,hh = inner
+              return xx >= x-.01 and yy >= y-.01 and xx+ww <= x+w+.01 and yy+hh <= y+h+.01
+          def compact_reveal(name, pane, offset_key, edge=None):
+              # Real browser wheel; never write an engine scroll offset.
+              for attempt in range(32):
+                  v = view()
+                  target, clip = (v["layout_controls"][k] for k in (name,pane))
+                  assert target["visible"] and clip["visible"], (name, target, clip)
+                  x,y,w,h = clip["rect"]
+                  tx,ty,tw,th = target["rect"]
+                  if edge is None:
+                      if encloses(clip["rect"], target["rect"]):
+                          return v
+                      assert th <= h+.01, (name, target, clip)
+                      delta = 64 if ty+th > y+h else -64
+                  else:
+                      assert edge in ("start","end") and tx >= x-.01 and tx+tw <= x+w+.01, (edge,target,clip)
+                      point = ty if edge == "start" else ty+th
+                      if y-.01 <= point <= y+h+.01 and ty < y+h and ty+th > y:
+                          return v
+                      delta = 64 if point > y+h else -64
+                  b = bounds()
+                  vw,vh = v["viewport_size"]
+                  # Move first so Godot's cached hover reflects the wheel point.
+                  px = round(b["x"]+b["width"]*(x+(w/2 if pane in ("book_scroll","recovery_body") else w-12))/vw)
+                  py = round(b["y"]+b["height"]*(y+h/2)/vh)
+                  api("POST", session+"/actions", {"actions":[{"type":"pointer","id":"mouse","parameters":{"pointerType":"mouse"},"actions":[
+                      {"type":"pointerMove","duration":80,"origin":"viewport","x":px,"y":py}]}]})
+                  time.sleep(.25)
+                  offset = view()[offset_key]
+                  api("POST", session+"/actions", {"actions":[{"type":"wheel","id":"wheel","actions":[
+                      {"type":"scroll","duration":80,"origin":"viewport","x":px,"y":py,"deltaX":0,"deltaY":delta}]}]})
+                  wait(lambda: (v if (v := view()) and v[offset_key] != offset else None), "scroll "+name, 5)
+              raise AssertionError(("unreachable control",name,view()))
+          def compact_book_target(name):
+              v = view()
+              if v["layout_controls"]["book_scroll"]["visible"]:
+                  v = compact_reveal(name,"book_scroll","book_scroll_offset")
+              boxes = compact_geometry(["book_tab",name],["book_tab",name])
+              x,y,w,h = boxes[name]
+              for band in ("status_band","save_band"):
+                  xx,yy,ww,hh = v["layout_controls"][band]["rect"]
+                  assert min(x+w,xx+ww) <= max(x,xx) or min(y+h,yy+hh) <= max(y,yy), (name,band,boxes,v)
+              return boxes[name]
+          def compact_click(name, confirmed_kind=None):
+              g = view()["layout_controls"][name]
+              assert g["visible"], (name, g)
+              x,y,w,h = g["rect"]
+              width,height = view()["viewport_size"]
+              b = bounds()
+              api("POST", session + "/actions", {"actions": [{"type":"pointer","id":"mouse",
+                  "parameters":{"pointerType":"mouse"},"actions":[
+                      {"type":"pointerMove","duration":50,"origin":"viewport",
+                       "x":round(b["x"]+b["width"]*(x+w/2)/width),"y":round(b["y"]+b["height"]*(y+h/2)/height)}]}]})
+              before = wait(lambda: ready(confirmed_kind), "compact confirmed "+confirmed_kind, 15) if confirmed_kind else None
+              api("POST", session + "/actions", {"actions": [{"type":"pointer","id":"mouse",
+                  "parameters":{"pointerType":"mouse"},"actions":[
+                      {"type":"pointerDown","button":0},{"type":"pause","duration":80},
+                      {"type":"pointerUp","button":0}]}]})
+              return before
+          def observe(predicate, label, seconds=35):
+              def probe():
+                  pair = saved()
+                  return pair if pair and predicate(pair["active"]["model"]) else None
+              return wait(probe, label, seconds)
+          def capture(name):
+              (evidence / (name + ".png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+          try:
+              with tempfile.TemporaryDirectory(prefix="arch002-persistent-city-") as profile, tempfile.TemporaryDirectory(prefix="arch002-compact-profiles-") as compact_profiles:
+                  wait(driver_ready, "ChromeDriver ready", 15)
+                  opened = api("POST", "/session", {"capabilities":{"alwaysMatch":{"browserName":"chrome",
+                      "goog:chromeOptions":{"args":["--headless=new","--window-size=1200,1000",
+                          "--disable-dev-shm-usage","--user-data-dir="+profile]}}}})
+                  session = "/session/" + opened["sessionId"]
+                  api("POST", session + "/timeouts", {"script":10000,"pageLoad":30000})
+                  api("POST", session + "/goog/cdp/execute", {"cmd":"Emulation.setDeviceMetricsOverride",
+                      "params":{"width":1100,"height":880,"deviceScaleFactor":1,"mobile":False}})
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "Godot city loader")
+                  assert js("return typeof window.littleRayCityProfilePort?.begin_open === 'function'")
+                  fresh = observe(lambda m: m["gold"] == 1200 and m["food"] == 240, "initial durable city")
+                  capture("01-initial")
+                  click("plant", 910, 480)
+                  planted = observe(lambda m: m["gold"] == 1180 and m["farm_crops"].get("farm-1",{}).get("recipe") == "sprout", "ordinary paid plant")
+                  click("feed", 830, 363)
+                  fed = observe(lambda m: m["food"] == 235 and m["individuals"]["ray-1"]["pips"] == 1, "ordinary feed")
+                  capture("02-fed-and-planted")
+                  # Verify positive resident income using real elapsed time, not a grant.
+                  observe(lambda m: m["income_ticks"] >= 240, "resident bin accrual", 45)
+                  click("collect", 910, 315)
+                  collected = observe(lambda m: m["gold"] > 1180, "ordinary Gold collection")
+                  assert collected["active"]["model"]["food"] == 235
+                  assert collected["previous"]["storage_revision"] + 1 == collected["active"]["storage_revision"]
+                  capture("03-collected")
+                  api("POST", session + "/refresh", {})
+                  wait(bounds, "city reload")
+                  restored = wait(lambda: (p if (p := saved()) and p["active"]["storage_revision"] > collected["active"]["storage_revision"] else None), "new startup checkpoint")
+                  for key in ("gold", "food", "individuals", "receipts", "farm_crops"):
+                      assert restored["active"]["model"][key] == collected["active"]["model"][key], key
+                  click("feed", 830, 363)
+                  after = observe(lambda m: m["food"] == 230 and m["individuals"]["ray-1"]["pips"] == 2, "ordinary feed after reload")
+                  assert len(after["active"]["model"]["receipts"]) == len(collected["active"]["model"]["receipts"]) + 1
+                  capture("04-reloaded-fed")
+                  before_harvest = observe(lambda m: m["elapsed_ms"] >= m["farm_crops"]["farm-1"]["deadline_ms"], "real-time crop maturity", 75)
+                  before_model = before_harvest["active"]["model"]
+                  assert before_model["farm_crops"]["farm-1"] == planted["active"]["model"]["farm_crops"]["farm-1"]
+                  assert before_model["food"] == 230
+                  click("harvest", 910, 576)
+                  harvested = observe(lambda m: m["food"] == 270 and "farm-1" not in m["farm_crops"], "ordinary paid crop harvest")
+                  harvested_model = harvested["active"]["model"]
+                  assert harvested_model["gold"] == before_model["gold"]
+                  assert harvested_model["xp"] == before_model["xp"] + 5
+                  assert len(harvested_model["receipts"]) == len(before_model["receipts"]) + 1
+                  capture("05-harvested")
+                  api("POST", session + "/refresh", {})
+                  wait(bounds, "post-harvest city reload")
+                  harvest_restored = wait(lambda: (v if (v := view()) and v["phase"] == "ready" and v["confirmed"] and not v["invalid"] else None), "post-harvest ready")
+                  assert harvest_restored["disabled"]["harvest"]
+                  final = saved()
+                  for key in ("gold", "food", "xp", "individuals", "receipts", "farm_crops"):
+                      assert final["active"]["model"][key] == harvested_model[key], key
+                  capture("06-harvest-reloaded")
+                  # Use the normal backup controls, never inject a profile or call a command.
+                  click("backup", 930, 629)
+                  wait(lambda: view()["backup_open"], "backup modal opened")
+                  modal_click(200, 705)
+                  wait(lambda: view()["backup_message"].startswith("Confirmed backup exported"), "portable backup exported")
+                  exported = saved()["active"]
+                  capture("07-city-backup-export")
+                  modal_click(900, 705)
+                  wait(lambda: not view()["backup_open"], "backup modal closed")
+                  click("feed", 830, 363)
+                  observe(lambda m: m["food"] < exported["model"]["food"], "feed after exported backup")
+                  click("backup", 930, 629)
+                  wait(lambda: view()["backup_open"], "backup modal reopened")
+                  before_restore = saved()["active"]
+                  modal_click(430, 705)
+                  wait(lambda: not view()["backup_restore_disabled"] and view()["backup_message"].startswith("Replace current city"), "validated backup preview")
+                  assert saved()["active"] == before_restore, "preview mutated durable city"
+                  preview_layout = view()
+                  assert preview_layout["backup_help_bounds_ok"], ("backup help extends outside modal or overlaps input", preview_layout["backup_layout_rects"])
+                  assert preview_layout["backup_message_bounds_ok"], ("backup status extends outside modal or overlaps actions", preview_layout["backup_layout_rects"])
+                  capture("08-city-backup-preview")
+                  modal_click(660, 705)
+                  wait(lambda: view()["backup_message"] == "Backup restored." and view()["phase"] == "ready", "confirmed replacement")
+                  replacement = saved()
+                  assert replacement["previous"] == before_restore
+                  assert replacement["active"]["storage_revision"] == before_restore["storage_revision"] + 1
+                  assert replacement["active"]["model"]["revision"] > max(before_restore["model"]["revision"], exported["model"]["revision"])
+                  for key in ("gold", "food", "xp", "individuals", "receipts", "farm_crops", "elapsed_ms"):
+                      assert replacement["active"]["model"][key] == exported["model"][key], key
+                  capture("09-city-backup-confirmed")
+                  modal_click(900, 705)
+                  wait(lambda: not view()["backup_open"], "back to restored city")
+                  api("POST", session + "/refresh", {})
+                  wait(bounds, "city reload after backup")
+                  wait(lambda: (v if (v := view()) and v["phase"] == "ready" and v["confirmed"] and not v["invalid"] else None), "restored city reload")
+                  backup_reloaded = saved()
+                  for key in ("gold", "food", "xp", "individuals", "receipts", "farm_crops"):
+                      assert backup_reloaded["active"]["model"][key] == exported["model"][key], key
+                  click("feed", 830, 363)
+                  post_backup_feed = observe(lambda m: m["food"] < exported["model"]["food"], "ordinary command after restore")
+                  assert len(post_backup_feed["active"]["model"]["receipts"]) == len(exported["model"]["receipts"]) + 1
+                  capture("10-city-backup-reloaded-fed")
+                  # Fault injection only in this disposable browser profile. Unload
+                  # the game first to end its writer session before changing bytes.
+                  inert_url = url.split("/index.html", 1)[0] + "/integration-manifest.json"
+                  api("POST", session + "/url", {"url":inert_url})
+                  assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                  injected = raw_city_pair(True)
+                  corrupt_pair = raw_city_pair()["observed"]
+                  assert corrupt_pair == injected["observed"]
+                  assert corrupt_pair["previous"] == injected["original"]["previous"]
+                  assert corrupt_pair["active"] != injected["original"]["active"]
+                  original_active = json.loads(injected["original"]["active"])
+                  for key in ("gold", "food", "xp", "individuals", "receipts", "farm_crops"):
+                      assert original_active["model"][key] == post_backup_feed["active"]["model"][key], key
+                  assert isinstance(json.loads(corrupt_pair["previous"])["model"], dict)
+                  # Ordinary startup must not auto-reset or silently grant a blank city.
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "corrupt city loader")
+                  def blocked_city():
+                      v = view()
+                      return v if v and v["phase"] == "unavailable" and v["overlay"] and not v["confirmed"] else None
+                  def recoverable_city():
+                      v = view()
+                      return v if v and v["phase"] == "recovery-required" and v["overlay"] and not v["confirmed"] and v["recovery_open"] else None
+                  blocked = wait(recoverable_city, "corrupt city offers explicit previous-save recovery")
+                  assert "Restoring may lose newer progress" in blocked["recovery_message"], blocked
+                  assert blocked["disabled"]["backup"] and not blocked["recovery_confirm_disabled"]
+                  capture("11-corrupt-city-blocked")
+                  modal_click(830, 363)
+                  time.sleep(2)
+                  assert recoverable_city(), "Corrupt city unexpectedly playable"
+                  assert raw_city_pair()["observed"] == corrupt_pair, "Blocked city overwrote recovery bytes"
+                  api("POST", session + "/refresh", {})
+                  wait(bounds, "corrupt city reload")
+                  blocked_reload = wait(recoverable_city, "corrupt reload still requires confirmation")
+                  assert not blocked_reload["recovery_confirm_disabled"], blocked_reload
+                  assert raw_city_pair()["observed"] == corrupt_pair, "Reload overwrote recovery bytes"
+                  capture("12-corrupt-city-reload-blocked")
+                  recovery_observation = {"active_preserved":True,"previous_preserved":True,
+                      "blocked":blocked,"blocked_reload":blocked_reload,
+                      "previous_storage_revision":json.loads(corrupt_pair["previous"])["storage_revision"],
+                      "recovery_choice_implemented":True,"confirmed":False}
+                  (evidence/"corrupt-city-observation.json").write_text(json.dumps(recovery_observation, indent=2))
+                  print(json.dumps({"corrupt_city_fail_closed":"pass","recovery_choice_implemented":True}), flush=True)
+                  # Envelope-valid future-schema predecessor, with a valid active city.
+                  # A startup autosave must not silently rotate away unknown data.
+                  api("POST", session + "/url", {"url":inert_url})
+                  assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                  unsupported = json.loads(injected["original"]["previous"])
+                  assert unsupported["model"]["checkpoint_schema"] == 2
+                  unsupported["model"]["checkpoint_schema"] = 3
+                  future_pair = {"active":injected["original"]["active"],"previous":json.dumps(unsupported)}
+                  raw_city_pair(replacement=future_pair)
+                  assert raw_city_pair()["observed"] == future_pair
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "future previous loader")
+                  future_blocked = wait(blocked_city, "unsupported previous visibly unavailable")
+                  assert "Save unavailable" in future_blocked["footer"], future_blocked
+                  modal_click(830, 363)
+                  time.sleep(2)
+                  assert blocked_city() and raw_city_pair()["observed"] == future_pair
+                  api("POST", session + "/refresh", {})
+                  wait(bounds, "future previous reload")
+                  wait(blocked_city, "unsupported previous reload remains unavailable")
+                  assert raw_city_pair()["observed"] == future_pair, "Unsupported previous lost on reload"
+                  capture("13-future-previous-preserved")
+                  (evidence/"future-previous-observation.json").write_text(json.dumps({"active_preserved":True,"previous_preserved":True,"blocked":future_blocked}, indent=2))
+                  # Restore the disposable corrupted pair again and explicitly
+                  # confirm through the real Godot button; do not inject a command.
+                  api("POST", session + "/url", {"url":inert_url})
+                  assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                  raw_city_pair(replacement=corrupt_pair)
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "recovery confirmation loader")
+                  wait(recoverable_city, "recovery preview before confirmation")
+                  assert raw_city_pair()["observed"] == corrupt_pair
+                  capture("14-recovery-preview")
+                  modal_click(300, 685)
+                  def recovered_city():
+                      v = view()
+                      return v if v and v["phase"] == "recovered" and v["recovery_open"] and not v["confirmed"] and v["recovery_confirm_disabled"] else None
+                  recovered = wait(recovered_city, "explicit recovery acknowledged")
+                  assert "Reload to open it" in recovered["recovery_message"]
+                  restored_pair = raw_city_pair()
+                  selected = json.loads(corrupt_pair["previous"])
+                  restored_active = json.loads(restored_pair["observed"]["active"])
+                  expected_model = dict(selected["model"])
+                  expected_model["revision"] += 1
+                  assert restored_active["model"] == expected_model
+                  assert restored_active["storage_revision"] == selected["storage_revision"] + 1
+                  assert restored_active["wall_marker_ms"] >= selected["wall_marker_ms"]
+                  assert restored_pair["observed"]["previous"] == corrupt_pair["previous"]
+                  archive = json.loads(restored_pair["archive"])
+                  assert archive == {"version":1,"activePresent":True,"previousPresent":True,**corrupt_pair}
+                  capture("15-recovery-confirmed")
+                  time.sleep(2)
+                  assert raw_city_pair()["observed"] == restored_pair["observed"]
+                  modal_click(800, 685)
+                  wait(bounds, "fresh session after recovery reload")
+                  wait(lambda: (v if (v := view()) and v["phase"] == "ready" and v["confirmed"] and not v["recovery_open"] else None), "recovered city reopened")
+                  reopened_recovery = saved()
+                  for key in ("gold", "food", "individuals", "receipts"):
+                      assert reopened_recovery["active"]["model"][key] == expected_model[key], key
+                  assert raw_city_pair()["archive"] == restored_pair["archive"]
+                  capture("16-recovery-reloaded")
+                  (evidence/"recovery-confirmed-observation.json").write_text(json.dumps({"status":"pass","recovered":recovered,"archive_preserved":True,"reopened":True}, indent=2))
+
+                  # A second corruption in the SAME disposable profile must not
+                  # overwrite its immutable recovery archive or offer recovery again.
+                  api("POST", session + "/url", {"url":inert_url})
+                  assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                  second_fault = raw_city_pair(True)
+                  assert second_fault["archivePresent"] and second_fault["archive"] == restored_pair["archive"]
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "second corrupt city loader")
+                  second_blocked = wait(blocked_city, "second corruption fails closed")
+                  assert not second_blocked["recovery_open"] and "Save unavailable" in second_blocked["footer"], second_blocked
+                  second_read = raw_city_pair()
+                  assert second_read["observed"] == second_fault["observed"]
+                  assert second_read["archivePresent"] and second_read["archive"] == restored_pair["archive"]
+                  capture("17-second-corruption-blocked")
+                  api("POST", session + "/refresh", {})
+                  wait(bounds, "second corruption reload")
+                  second_reload = wait(blocked_city, "second corruption remains blocked")
+                  assert not second_reload["recovery_open"] and "Save unavailable" in second_reload["footer"], second_reload
+                  second_read = raw_city_pair()
+                  assert second_read["observed"] == second_fault["observed"]
+                  assert second_read["archivePresent"] and second_read["archive"] == restored_pair["archive"]
+                  (evidence/"second-corruption-observation.json").write_text(json.dumps({"status":"pass","archive_preserved":True,"raw_pair_preserved":True,"recovery_refused":True,"reload_blocked":True}, indent=2))
+                  print(json.dumps({"second_corruption_archive_preserved":"pass"}), flush=True)
+
+                  # Each compact orientation starts in an independent fresh
+                  # disposable browser profile. The normal backup replacement
+                  # below creates its valid active/previous pair. Do not clear
+                  # the desktop archive or reset a real player's storage.
+                  compact_observations = []
+                  for width, height in ((390,844),(844,390),(568,320),(320,480)):
+                      tag = f"{width}x{height}"
+                      api("DELETE", session)
+                      session = None
+                      compact_profile = pathlib.Path(compact_profiles) / tag
+                      compact_profile.mkdir()
+                      compact_opened = api("POST", "/session", {"capabilities":{"alwaysMatch":{"browserName":"chrome",
+                          "goog:chromeOptions":{"args":["--headless=new","--window-size=1200,1000",
+                              "--disable-dev-shm-usage","--user-data-dir="+str(compact_profile)]}}}})
+                      session = "/session/" + compact_opened["sessionId"]
+                      api("POST", session + "/timeouts", {"script":10000,"pageLoad":30000})
+                      api("POST", session + "/goog/cdp/execute", {"cmd":"Emulation.setDeviceMetricsOverride",
+                          "params":{"width":width,"height":height,"deviceScaleFactor":1,"mobile":False}})
+                      api("POST", session + "/url", {"url":url})
+                      wait(bounds, "fresh compact city loader "+tag)
+                      assert js("return typeof window.littleRayCityProfilePort?.begin_open === 'function'")
+                      compact_fresh = observe(lambda m: m["gold"] == 1200 and m["food"] == 240, "fresh compact durable city "+tag)
+                      wait(lambda: (v if (v := view()) and v["viewport_size"] == [width,height] and v["layout_controls"]["book_tab"]["visible"] else None), "compact layout "+tag)
+                      compact_geometry(["book_tab"], ["book_tab"])
+                      # Exercise the newly pinned map target against real
+                      # acknowledged persistence, not the session-only fixture.
+                      def marker_ready():
+                          v = view()
+                          if v and v["compact_page"] == 0 and v["starter_bin"] > 0 and min(v["starter_marker"][2:]) > 0 and v["confirmed"] and not v["invalid"] and not v["overlay"]:
+                              return v
+                          return None
+                      marker_view = wait(marker_ready, "natural resident Gold target "+tag, 45)
+                      x,y,w,h = marker_view["starter_marker"]
+                      b = bounds()
+                      vw,vh = marker_view["viewport_size"]
+                      sx,sy = b["width"]/vw,b["height"]/vh
+                      assert encloses((0,0,vw,vh),(x,y,w,h)) and w*sx >= 44 and h*sy >= 44, marker_view
+                      blockers = marker_view["map_nav_geometry"] + [marker_view["layout_controls"][k] for k in ("status_band","save_band")]
+                      for g in blockers:
+                          if g["visible"]:
+                              xx,yy,ww,hh = g["rect"]
+                              assert min(x+w,xx+ww) <= max(x,xx) or min(y+h,yy+hh) <= max(y,yy), (marker_view,g)
+                      capture("compact-"+tag+"-map-marker")
+                      api("POST", session + "/actions", {"actions":[{"type":"pointer","id":"mouse","parameters":{"pointerType":"mouse"},"actions":[
+                          {"type":"pointerMove","duration":50,"origin":"viewport","x":round(b["x"]+sx*(x+w/2)),"y":round(b["y"]+sy*(y+h/2))}]}]})
+                      # Use the same ready-window discipline as other commands.
+                      # Never retry an uncertain click or bypass the real input.
+                      wait(lambda: ready("collect"), "confirmed map collection "+tag, 15)
+                      api("POST", session + "/actions", {"actions":[{"type":"pointer","id":"mouse","parameters":{"pointerType":"mouse"},"actions":[
+                          {"type":"pointerDown","button":0},{"type":"pause","duration":80},{"type":"pointerUp","button":0}]}]})
+                      initial_model = compact_fresh["active"]["model"]
+                      marker_saved = observe(lambda m: len(m["receipts"]) > len(initial_model["receipts"]), "durable map collection "+tag)
+                      marker_model = marker_saved["active"]["model"]
+                      new_receipts = {k:v for k,v in marker_model["receipts"].items() if k not in initial_model["receipts"]}
+                      assert len(new_receipts) == 1 and all(marker_model["receipts"].get(k) == v for k,v in initial_model["receipts"].items()), new_receipts
+                      receipt = next(iter(new_receipts.values()))
+                      delta = marker_model["gold"] - initial_model["gold"]
+                      assert delta > 0 and marker_model["revision"] == initial_model["revision"] + 1, marker_model
+                      assert receipt["kind"] == "collect" and receipt["argument"] == "tide-1" and receipt["message"].startswith(f"+{delta} resident Gold"), receipt
+                      marker_evidence = {"rect":[x,y,w,h],"css_size":[w*sx,h*sy],"gold_delta":delta,"receipt":receipt,"revision_delta":1,"durable":True}
+                      capture("compact-"+tag+"-map-collected")
+                      print(json.dumps({"compact_map_collection":tag,"marker":marker_evidence}),flush=True)
+                      compact_click("book_tab")
+                      wait(lambda: view()["compact_page"] == 6 and view()["layout_controls"]["backup"]["visible"], "compact Book "+tag)
+                      short = height <= 480 and width <= 568
+                      if short:
+                          assert view()["layout_controls"]["book_scroll"]["visible"], view()
+                          book_rects = {name:compact_book_target(name) for name in ("collection","favorite","sale","backup")}
+                          capture("compact-"+tag+"-book-scrolled")
+                          # Reselect Book: city's layout rebuild must not orphan Backup.
+                          compact_click("book_tab")
+                          wait(lambda: view()["compact_page"] == 6 and view()["layout_controls"]["book_scroll"]["visible"], "Book reselected "+tag)
+                          compact_book_target("backup")
+                          compact_click("map_tab")
+                          wait(lambda: view()["compact_page"] == 0 and not view()["layout_controls"]["backup"]["visible"], "backup hidden outside Book "+tag)
+                          compact_click("book_tab")
+                          wait(lambda: view()["compact_page"] == 6 and view()["layout_controls"]["backup"]["visible"], "Book returned "+tag)
+                          compact_book_target("backup")
+                      else:
+                          book_rects = compact_geometry(["book_tab","collection","favorite","sale","backup"], ["book_tab","collection","favorite","sale","backup"])
+                          compact_book_target("backup")
+                      capture("compact-"+tag+"-book")
+                      before_open = compact_click("backup", "backup")
+                      opened_backup = wait(lambda: (v if (v := view()) and v["backup_open"] else None), "compact backup opened "+tag)
+                      assert opened_backup["presses"]["backup"] == before_open["presses"]["backup"] + 1, opened_backup
+                      assert opened_backup["downs"]["backup"] == before_open["downs"]["backup"] + 1, opened_backup
+                      assert opened_backup["backup_open_attempt"]["outcome"] == "opened" and not opened_backup["backup_open_pending"], opened_backup
+                      assert opened_backup["phase"] == "ready" and opened_backup["confirmed"] and not opened_backup["invalid"], opened_backup
+                      print(json.dumps({"compact_backup_open":tag,"attempt":opened_backup["backup_open_attempt"]}),flush=True)
+                      compact_click("export")
+                      wait(lambda: view()["backup_message"].startswith("Confirmed backup exported"), "compact export "+tag)
+                      before = saved()["active"]
+                      compact_click("preview")
+                      wait(lambda: not view()["backup_restore_disabled"] and view()["backup_message"].startswith("Replace current city"), "compact preview "+tag)
+                      assert saved()["active"] == before, "compact preview mutated save"
+                      # Container layout can settle after the text-change frame.
+                      # Require the original fully-visible/non-overlap conditions,
+                      # not just the successful preview response.
+                      if short:
+                          # A deliberately scrolling body need not show all three
+                          # children at once. Require actual reachability and keep
+                          # the fixed action row fully visible/nonoverlapping.
+                          backup_rects = compact_geometry(["backup_heading","backup_body","export","preview","restore","close"], ["export","preview","restore","close"])
+                          for name in ("help","input","message"):
+                              compact_reveal(name,"backup_body","backup_scroll_offset")
+                              backup_rects[name] = compact_geometry([name])[name]
+                      else:
+                          wait(lambda: (v if (v := view()) and v["backup_help_bounds_ok"] and v["backup_message_bounds_ok"] else None), "compact wrapped backup layout "+tag)
+                          backup_rects = compact_geometry(["backup_heading","help","input","message","export","preview","restore","close"], ["export","preview","restore","close"])
+                      capture("compact-"+tag+"-preview")
+                      compact_click("restore")
+                      wait(lambda: view()["backup_message"] == "Backup restored." and view()["phase"] == "ready", "compact replacement "+tag)
+                      after_pair = saved()
+                      assert after_pair["previous"] == before
+                      assert after_pair["active"]["storage_revision"] == before["storage_revision"] + 1
+                      for k in ("gold","food","xp","individuals","receipts","farm_crops","elapsed_ms"):
+                          assert after_pair["active"]["model"][k] == before["model"][k], k
+                      compact_click("close")
+                      wait(lambda: not view()["backup_open"], "compact modal closed "+tag)
+                      api("POST", session + "/url", {"url":inert_url})
+                      assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                      valid_seed = raw_city_pair()
+                      assert not valid_seed["archivePresent"] and valid_seed["archive"] is None, "compact profile already archived"
+                      seed_active = json.loads(valid_seed["observed"]["active"])
+                      seed_previous = json.loads(valid_seed["observed"]["previous"])
+                      assert seed_active["storage_revision"] == seed_previous["storage_revision"] + 1
+                      assert seed_active["model"]["revision"] >= seed_previous["model"]["revision"]
+                      fault = raw_city_pair(True)
+                      assert not fault["archivePresent"] and fault["original"] == valid_seed["observed"]
+                      raw = fault["observed"]
+                      api("POST", session + "/url", {"url":url})
+                      wait(bounds, "compact corrupt loader "+tag)
+                      wait(recoverable_city, "compact explicit recovery "+tag)
+                      assert raw_city_pair()["observed"] == raw
+                      recovery_rects = compact_geometry(["recovery_heading","recovery_body","recover","reload"], ["recover","reload"])
+                      # A long warning may exceed the available body height.
+                      # Verify real wheel access to both ends, not merely clipping.
+                      warning = view()["recovery_message"]
+                      assert "Restoring may lose newer progress" in warning and "original damaged records will be archived" in warning and "No changes occur until you confirm." in warning, warning
+                      top = compact_reveal("recovery_message","recovery_body","recovery_scroll_offset","start")
+                      capture("compact-"+tag+"-recovery-preview")
+                      bottom = compact_reveal("recovery_message","recovery_body","recovery_scroll_offset","end")
+                      message = bottom["layout_controls"]["recovery_message"]
+                      clip = bottom["layout_controls"]["recovery_body"]
+                      assert message["rect"][3] >= message["minimum"][1]-.01, (message,clip)
+                      if message["rect"][3] > clip["rect"][3]+.01:
+                          assert bottom["recovery_scroll_offset"] > top["recovery_scroll_offset"], (top,bottom)
+                      else:
+                          assert encloses(clip["rect"],message["rect"]), (message,clip)
+                      recovery_rects["message_start"] = top["layout_controls"]["recovery_message"]["rect"]
+                      recovery_rects["message_end"] = message["rect"]
+                      recovery_rects["scroll_offsets"] = [top["recovery_scroll_offset"],bottom["recovery_scroll_offset"]]
+                      assert compact_geometry(["recovery_heading","recovery_body","recover","reload"], ["recover","reload"]) == {k: recovery_rects[k] for k in ("recovery_heading","recovery_body","recover","reload")}
+                      assert raw_city_pair()["observed"] == raw, "scrolling changed the damaged records"
+                      capture("compact-"+tag+"-recovery-warning-end")
+                      compact_click("recover")
+                      wait(recovered_city, "compact recovery acknowledged "+tag)
+                      restored_compact = raw_city_pair()
+                      previous = json.loads(raw["previous"])
+                      restored_model = dict(previous["model"])
+                      restored_model["revision"] += 1
+                      assert json.loads(restored_compact["observed"]["active"])["model"] == restored_model
+                      assert restored_compact["observed"]["previous"] == raw["previous"]
+                      assert json.loads(restored_compact["archive"]) == {"version":1,"activePresent":True,"previousPresent":True,**raw}
+                      compact_click("reload")
+                      wait(bounds, "compact recovery reload "+tag)
+                      wait(lambda: (v if (v := view()) and v["phase"] == "ready" and v["confirmed"] and not v["recovery_open"] else None), "compact recovered city ready "+tag)
+                      for k in ("gold","food","individuals","receipts"):
+                          assert saved()["active"]["model"][k] == restored_model[k], k
+                      assert raw_city_pair()["archive"] == restored_compact["archive"]
+                      capture("compact-"+tag+"-reloaded")
+                      compact_observations.append({"viewport":[width,height],"map_marker":marker_evidence,"book":book_rects,"backup":backup_rects,"recovery":recovery_rects,"backup_open_attempt":opened_backup["backup_open_attempt"],"preview_preserved":True,"restored":True,"fresh_profile":True,"archive_absent_before_fault":True,"archive_preserved":True,"reopened":True})
+                      print(json.dumps({"compact_city_recovery":"pass","viewport":[width,height]}), flush=True)
+                  (evidence/"compact-backup-recovery.json").write_text(json.dumps(compact_observations,indent=2))
+                  report = {"persistent_city":"pass","browser":opened["capabilities"].get("browserVersion"),
+                      "compact_backup_recovery":compact_observations,
+                      "manifest":json.loads((root/"integration-manifest.json").read_text()),
+                      "checks":["initial checkpoint","paid plant","feed","resident collection","reload preserves state","feed after reload","paid crop matures and harvests once","harvest persists after reload","portable city export and preview","explicit restore with previous-good","reload and command after restore","malformed active save fails closed and preserves previous-good","unsupported previous schema fails closed and preserves both copies","explicit corrupted-save recovery preserves archive and reopens selected city","second corruption refuses recovery and preserves raw pair/archive across reload","isolated compact backup/recovery in portrait and landscape"],
+                      "fresh":fresh,"planted":planted,"fed":fed,"collected":collected,"restored":restored,"after":after,
+                      "before_harvest":before_harvest,"harvested":harvested,"harvest_reloaded":final,
+                      "backup_exported":exported,"backup_before_restore":before_restore,"backup_replacement":replacement,
+                      "backup_reloaded":backup_reloaded,"post_backup_feed":post_backup_feed,
+                      "backup_preview_layout":{"help_bounds_ok":preview_layout["backup_help_bounds_ok"],"message_bounds_ok":preview_layout["backup_message_bounds_ok"],"rects":preview_layout["backup_layout_rects"]},
+                      "actual_site_verified":False}
+                  (evidence/"observation.json").write_text(json.dumps(report, indent=2))
+                  print(json.dumps({"persistent_city":"pass","checks":report["checks"],"actual_site_verified":False}), flush=True)
+                  # Separate disposable desktop profile, after the existing ordinary
+                  # and compact scenarios. Seed only after unloading the live writer.
+                  # The seed comes from 13,000 real native domain commands, not a
+                  # claimed 13,000 browser clicks. Exercise the actual browser
+                  # transport and visible export/preview/confirm/recovery controls.
+                  api("DELETE", session)
+                  session = None
+                  large_profile = pathlib.Path(compact_profiles) / "large-capacity"
+                  large_profile.mkdir()
+                  large_opened = api("POST", "/session", {"capabilities":{"alwaysMatch":{"browserName":"chrome",
+                      "goog:chromeOptions":{"args":["--headless=new","--window-size=1200,1000",
+                          "--disable-dev-shm-usage","--enable-logging",
+                          "--log-file="+str(evidence/"large-chrome.log"),
+                          "--user-data-dir="+str(large_profile)]}}}})
+                  session = "/session/" + large_opened["sessionId"]
+                  api("POST", session + "/timeouts", {"script":30000,"pageLoad":30000})
+                  api("POST", session + "/goog/cdp/execute", {"cmd":"Emulation.setDeviceMetricsOverride",
+                      "params":{"width":1100,"height":880,"deviceScaleFactor":1,"mobile":False}})
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "large profile initial loader")
+                  observe(lambda m: m["gold"] == 1200 and m["food"] == 240, "large profile fresh city")
+                  click("feed", 830, 363)
+                  observe(lambda m: m["food"] == 235, "large profile initial previous-good")
+                  api("POST", session + "/url", {"url":inert_url})
+                  assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                  initial_pair = raw_city_pair()
+                  assert not initial_pair["archivePresent"]
+                  fixture = json.loads((root.parent/"arch002-large-model.json").read_text())
+                  assert len(fixture["receipts"]) == 13000
+                  marker = int(time.time()*1000)
+                  seed = {key:json.dumps({"storage_revision":revision,"wall_marker_ms":marker,"model":fixture},
+                      separators=(",",":"),ensure_ascii=False) for key, revision in (("previous",1),("active",2))}
+                  seed_bytes = len(seed["active"].encode("utf-8"))
+                  assert 1048576 < seed_bytes < 4194304, seed_bytes
+                  raw_city_pair(replacement=seed)
+                  assert raw_city_pair()["observed"] == seed
+                  large_times = {}
+                  started = time.monotonic()
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "large city loader")
+                  wait(lambda: ready("backup"), "large city acknowledged")
+                  large_times["load_and_ack_seconds"] = time.monotonic()-started
+                  large_initial = saved()["active"]
+                  assert large_initial["model"]["receipts"] == fixture["receipts"]
+                  click("backup", 930, 629)
+                  wait(lambda: view()["backup_open"], "large backup opened")
+                  started = time.monotonic()
+                  modal_click(200, 705)
+                  wait(lambda: view()["backup_message"].startswith("Confirmed backup exported"), "large export to text")
+                  large_times["export_seconds"] = time.monotonic()-started
+                  before_large_restore = saved()["active"]
+                  # Exercise a real portable exchange, not just previewing
+                  # the same TextEdit buffer populated by Export. Grant only
+                  # disposable CI origin clipboard permissions, no game API bypass.
+                  api("POST", session + "/goog/cdp/execute", {"cmd":"Browser.grantPermissions",
+                      "params":{"origin":url.split("/index.html",1)[0],
+                          "permissions":["clipboardReadWrite","clipboardSanitizedWrite"]}})
+                  clipboard_started = time.monotonic()
+                  copied_backup = copy_backup("LR-CI-sentinel-before-copy")
+                  decoded_backup = json.loads(copied_backup)
+                  assert decoded_backup == {"format":"little-ray-city-backup","version":1,
+                      "wall_marker_ms":before_large_restore["wall_marker_ms"],"model":before_large_restore["model"]}, "Exported clipboard model differs from confirmed profile"
+                  assert len(copied_backup.encode("utf-8")) > 1048576, "Clipboard payload truncated"
+                  compact_click("input")
+                  key_press("a", control=True)
+                  key_press("\uE003")
+                  modal_click(430, 705)
+                  wait(lambda: view()["backup_message"] == "Backup empty or too large." and view()["backup_restore_disabled"], "cleared editor rejects preview")
+                  assert saved()["active"] == before_large_restore, "Clearing editor mutated save"
+                  assert clipboard_read() == copied_backup, "Clear/preview changed clipboard"
+                  compact_click("input")
+                  key_press("v", control=True)
+                  large_times["clipboard_copy_clear_paste_seconds"] = time.monotonic()-clipboard_started
+                  started = time.monotonic()
+                  modal_click(430, 705)
+                  wait(lambda: not view()["backup_restore_disabled"] and view()["backup_message"].startswith("Replace current city"), "large preview")
+                  large_times["preview_seconds"] = time.monotonic()-started
+                  # A second real copy with a distinct sentinel proves paste
+                  # preserved every character, rather than just valid JSON.
+                  pasted_backup = copy_backup("LR-CI-sentinel-after-paste")
+                  assert pasted_backup == copied_backup, "Pasted backup differs from exported clipboard text"
+                  assert not view()["backup_restore_disabled"], "Read-only copy invalidated preview"
+                  import hashlib
+                  clipboard_digest = hashlib.sha256(copied_backup.encode("utf-8")).hexdigest()
+                  assert saved()["active"] == before_large_restore
+                  started = time.monotonic()
+                  modal_click(660, 705)
+                  wait(lambda: view()["backup_message"] == "Backup restored." and view()["phase"] == "ready", "large confirmed replacement")
+                  large_times["restore_seconds"] = time.monotonic()-started
+                  large_replaced = saved()
+                  assert large_replaced["previous"] == before_large_restore
+                  assert large_replaced["active"]["storage_revision"] == before_large_restore["storage_revision"] + 1
+                  assert large_replaced["active"]["model"]["receipts"] == fixture["receipts"]
+                  capture("large-backup-confirmed")
+                  api("POST", session + "/url", {"url":inert_url})
+                  assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                  large_fault = raw_city_pair(True)
+                  assert not large_fault["archivePresent"]
+                  large_corrupt = large_fault["observed"]
+                  assert len(large_corrupt["previous"].encode("utf-8")) > 1048576
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "large corrupt loader")
+                  wait(recoverable_city, "large previous copy offered")
+                  assert raw_city_pair()["observed"] == large_corrupt
+                  capture("large-recovery-preview")
+                  started = time.monotonic()
+                  modal_click(300, 685)
+                  wait(recovered_city, "large recovery acknowledged")
+                  large_times["recover_seconds"] = time.monotonic()-started
+                  large_recovery = raw_city_pair()
+                  selected_large = json.loads(large_corrupt["previous"])
+                  expected_large = dict(selected_large["model"])
+                  expected_large["revision"] += 1
+                  assert json.loads(large_recovery["observed"]["active"])["model"] == expected_large
+                  assert large_recovery["observed"]["previous"] == large_corrupt["previous"]
+                  assert json.loads(large_recovery["archive"]) == {"version":1,"activePresent":True,"previousPresent":True,**large_corrupt}
+                  modal_click(800, 685)
+                  wait(bounds, "large recovery reload")
+                  wait(lambda: ready("backup"), "large recovery reopened")
+                  assert saved()["active"]["model"]["receipts"] == fixture["receipts"]
+                  assert raw_city_pair()["archive"] == large_recovery["archive"]
+                  capture("large-recovery-reloaded")
+                  large_report = {"large_city_browser":"pass","seed_bytes":seed_bytes,"receipts":13000,
+                      "seeded_native_fixture":True,"preview_preserved":True,"restored":True,
+                      "clipboard_roundtrip":{"method":"Chromium WebDriver keyboard + browser clipboard readback",
+                          "cleared_preview_rejected":True,"exact_text_equal":True,
+                          "bytes":len(copied_backup.encode("utf-8")),"sha256":clipboard_digest},
+                      "archive_preserved":True,"reopened":True,"elapsed_seconds":large_times,
+                      "actual_site_verified":False}
+                  (evidence/"large-city-browser.json").write_text(json.dumps(large_report,indent=2))
+                  print(json.dumps(large_report), flush=True)
+                  # Isolated final browser fault: a genuine IndexedDB versionchange
+                  # after an acknowledged save and armed, visible backup preview.
+                  # Never upgrade a profile used by any other scenario or player.
+                  api("DELETE", session)
+                  session = None
+                  idle_profile = pathlib.Path(compact_profiles) / "idle-invalidation"
+                  idle_profile.mkdir()
+                  idle_opened = api("POST", "/session", {"capabilities":{"alwaysMatch":{"browserName":"chrome",
+                      "goog:chromeOptions":{"args":["--headless=new","--window-size=1200,1000",
+                          "--disable-dev-shm-usage","--user-data-dir="+str(idle_profile)]}}}})
+                  session = "/session/" + idle_opened["sessionId"]
+                  api("POST", session + "/timeouts", {"script":15000,"pageLoad":30000})
+                  api("POST", session + "/goog/cdp/execute", {"cmd":"Emulation.setDeviceMetricsOverride",
+                      "params":{"width":1100,"height":880,"deviceScaleFactor":1,"mobile":False}})
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "idle invalidation loader")
+                  observe(lambda m: m["gold"] == 1200 and m["food"] == 240, "idle fixture fresh city")
+                  click("feed", 830, 363)
+                  observe(lambda m: m["food"] == 235, "idle fixture previous-good")
+                  compact_click("backup", "backup")
+                  wait(lambda: view()["backup_open"] and view()["phase"] == "ready", "idle backup opened")
+                  compact_click("export")
+                  wait(lambda: view()["backup_message"].startswith("Confirmed backup exported"), "idle backup exported")
+                  compact_click("preview")
+                  before_idle = wait(lambda: (v if (v := view()) and v["phase"] == "ready" and not v["backup_restore_disabled"]
+                      and v["backup_message"].startswith("Replace current city") else None), "idle preview armed")
+                  capture("idle-backup-before")
+                  def idle_raw_records(version=None):
+                      return clipboard_call("""
+                        const version = arguments[0], name = "little-ray-city-checkpoint-v2";
+                        const operation = (async () => {
+                          const db = await new Promise((ok,bad) => {
+                            const req = version === null ? indexedDB.open(name) : indexedDB.open(name,version);
+                            req.onsuccess = () => ok(req.result);
+                            req.onerror = () => bad(req.error);
+                            req.onblocked = () => bad(Error("upgrade blocked"));
+                            req.onupgradeneeded = e => {
+                              if (version !== 2 || e.oldVersion !== 1 || e.newVersion !== 2) req.transaction.abort();
+                            };
+                          });
+                          try {
+                            return await new Promise((ok,bad) => {
+                              const tx = db.transaction("profiles","readonly"), store = tx.objectStore("profiles");
+                              const keys = ["active","previous","recovery-original"];
+                              const values = keys.map(key => store.get(key)), present = keys.map(key => store.getKey(key));
+                              tx.oncomplete = () => ok({version:db.version,records:keys.map((key,i) => ({
+                                key,present:present[i].result !== undefined,value:values[i].result ?? null
+                              }))});
+                              tx.onabort = tx.onerror = () => bad(tx.error);
+                            });
+                          } finally { db.close(); }
+                        })();
+                      """, (version,))
+                  idle_pair = idle_raw_records()
+                  assert idle_pair["version"] == 1 and all(x["present"] for x in idle_pair["records"][:2])
+                  assert not idle_pair["records"][2]["present"], "Idle fixture must not share a recovered profile"
+                  idle_upgraded = idle_raw_records(2)
+                  assert idle_upgraded["version"] == 2 and idle_upgraded["records"] == idle_pair["records"], "Upgrade changed durable records"
+                  def idle_fenced():
+                      v = view()
+                      return v if v and v["phase"] == "unavailable" and v["backup_open"] and v["backup_restore_disabled"] and v["disabled"]["backup"] and "Save unavailable" in v["backup_message"] else None
+                  idle_fenced_view = wait(idle_fenced, "idle invalidation visible in backup UI")
+                  assert idle_fenced_view["domain_revision"] == before_idle["domain_revision"], "Invalidation changed visible confirmed revision"
+                  capture("idle-backup-invalidated")
+                  compact_click("restore")
+                  time.sleep(.35)
+                  assert idle_fenced() and view()["domain_revision"] == before_idle["domain_revision"]
+                  assert idle_raw_records() == idle_upgraded, "Disabled restore changed durable records"
+                  compact_click("close")
+                  # Terminal overlay is the input fence; raw widget disabled flags describe
+                  # economic eligibility and may legitimately remain false.
+                  def idle_closed_fence():
+                      v = view()
+                      return v if v and not v["backup_open"] and v["phase"] == "unavailable" and v["overlay"] and v["disabled"]["backup"] and "Save unavailable" in v["footer"] else None
+                  idle_closed = wait(idle_closed_fence, "closed modal retains terminal overlay")
+                  idle_kinds = ("feed", "plant", "collect", "harvest")
+                  def idle_assert_fence(label):
+                      v = idle_closed_fence()
+                      assert v, (label, "terminal overlay lost", view())
+                      assert v["domain_revision"] == before_idle["domain_revision"], (label, "visible revision changed")
+                      assert not v["pending_kind"], (label, "economic action pending")
+                      for counter in ("downs", "presses"):
+                          assert all(v[counter][k] == before_idle[counter][k] for k in idle_kinds), (label, counter, v[counter], before_idle[counter])
+                      assert idle_raw_records() == idle_upgraded, (label, "durable active/previous/archive changed")
+                      return v
+                  idle_assert_fence("close")
+                  capture("idle-backup-closed")
+                  # Use browser-delivered W3C input, not JS-dispatched events or game commands.
+                  # Audit real events at capture phase; a no-op test driver must not pass.
+                  assert js("""
+                      window.arch002IdleInput = [];
+                      for (const type of ["pointerdown", "keydown"]) window.addEventListener(type, e => {
+                          window.arch002IdleInput.push({type, trusted:e.isTrusted,
+                              canvas:e.target===document.querySelector("canvas"),
+                              key:e.key??null, x:e.clientX??null, y:e.clientY??null});
+                      }, true);
+                      return true;
+                  """)
+                  import re as idle_re
+                  idle_attempts = []
+                  for kind in ("feed", "plant"):
+                      v = idle_assert_fence(kind + " before")
+                      # Parse the exact diagnostic Rect2 format; fail closed on missing geometry.
+                      m = idle_re.fullmatch(r"\[P: \(([-0-9.]+), ([-0-9.]+)\), S: \(([-0-9.]+), ([-0-9.]+)\)\]", v["rects"][kind])
+                      assert m, (kind, v["rects"][kind])
+                      x,y,w,h = map(float,m.groups())
+                      vw,vh = v["viewport_size"]
+                      assert w>0 and h>0 and 0<=x<x+w<=vw and 0<=y<y+h<=vh, (kind, x,y,w,h,vw,vh)
+                      b = bounds()
+                      assert b and b["width"]>0 and b["height"]>0
+                      expected_x = b["x"] + b["width"]*(x+w/2)/vw
+                      expected_y = b["y"] + b["height"]*(y+h/2)/vh
+                      n = len(js("return window.arch002IdleInput;"))
+                      # modal_click uses normalized desktop coordinates and does not wait for readiness.
+                      modal_click((x+w/2)*1100/vw, (y+h/2)*880/vh)
+                      time.sleep(.25)
+                      events = js("return window.arch002IdleInput;")[n:]
+                      assert any(e["type"]=="pointerdown" and e["trusted"] and e["canvas"] and abs(e["x"]-expected_x)<=2 and abs(e["y"]-expected_y)<=2 for e in events), (kind, "pointer did not reach intended canvas point", events)
+                      idle_assert_fence(kind + " pointer")
+                      n = len(js("return window.arch002IdleInput;"))
+                      key_press("\uE007")  # Enter
+                      key_press("\uE00D")  # Space
+                      time.sleep(.25)
+                      events = js("return window.arch002IdleInput;")[n:]
+                      assert all(any(e["type"]=="keydown" and e["trusted"] and e["canvas"] and e["key"]==key for e in events) for key in ("Enter", " ")), (kind, "keyboard delivery not demonstrated", events)
+                      idle_assert_fence(kind + " keyboard")
+                      # Browser-handled Tab may leave canvas; record rather than mislabel focus.
+                      n = len(js("return window.arch002IdleInput;"))
+                      key_press("\uE004")  # Tab
+                      key_press("\uE007")
+                      key_press("\uE00D")
+                      time.sleep(.25)
+                      traversal = js("return window.arch002IdleInput;")[n:]
+                      idle_assert_fence(kind + " focus traversal")
+                      idle_attempts.append({"kind":kind,"target_css":[expected_x,expected_y],"pointer_delivered":True,
+                          "enter_space_delivered_to_canvas":True,"focus_traversal_events":traversal})
+                  idle_assert_fence("final")
+                  capture("idle-backup-fence-inputs")
+                  idle_report = {"idle_backup_invalidation":"pass","fresh_disposable_profile":True,
+                      "real_indexeddb_upgrade":[1,2],"preview_armed_before_fault":True,
+                      "visible_unavailable":True,"restore_disabled":True,"city_action_fence_after_close":True,
+                      "input_attempts":idle_attempts,"confirmed_revision_unchanged":True,
+                      "exact_active_previous_archive_preserved":True,"actual_site_verified":False}
+                  (evidence/"idle-backup-invalidation.json").write_text(json.dumps(idle_report,indent=2))
+                  print(json.dumps(idle_report), flush=True)
+          except Exception as error:
+              if session:
+                  try:
+                      capture("99-failure")
+                      record("failure: " + str(error))
+                  except Exception as diagnostic_error:
+                      print("Failure evidence capture:", diagnostic_error, flush=True)
+              raise
+          finally:
+              if session:
+                  try:
+                      api("DELETE", session)
+                  except Exception as error:
+                      print("Browser cleanup:", error, flush=True)
+              driver.terminate()
+              try:
+                  driver.wait(timeout=10)
+              except subprocess.TimeoutExpired:
+                  driver.kill()
+                  driver.wait()
+              server.shutdown()
+              # Retain renderer phase markers even when WebDriver cannot respond.
+              # Print only the structured marker, not arbitrary browser log text.
+              import re
+              trace_path = evidence/"large-chrome.log"
+              if trace_path.exists():
+                  markers = re.findall(r"LR_EXPORT_TRACE stage=[a-z_]+ ticks_ms=\d+ chars=-?\d+",
+                      trace_path.read_text(errors="replace"))
+                  (evidence/"large-export-trace.json").write_text(json.dumps(markers, indent=2))
+                  print(json.dumps({"large_export_trace":markers}), flush=True)
+              else:
+                  print("Large export renderer log unavailable", flush=True)
+          PY
+      - name: Retain combined city export and browser evidence (not hosted)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: arch002-persistent-city-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/arch002-persistent-city/
+            ${{ runner.temp }}/arch002-city-browser-evidence/
+          if-no-files-found: warn
+          retention-days: 3

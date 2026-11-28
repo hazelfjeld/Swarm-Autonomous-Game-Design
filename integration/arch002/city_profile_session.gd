@@ -8,6 +8,7 @@ extends RefCounted
 const City = preload("res://city_model.gd")
 const Commit = preload("res://profile_commit.gd")
 var _port: Variant
+var _monitor_health := false
 var _boundary = Commit.new(_valid_city)
 var _status := "new"
 var _visible: Dictionary = {}
@@ -21,6 +22,12 @@ func _valid_city(raw: Dictionary) -> bool:
 	return City.validate_snapshot(raw)
 
 func status() -> String:
+	# A consumed success can become stale when IndexedDB closes on versionchange.
+	# Only check idle states; pending operations still resolve via take_result.
+	if _monitor_health and _status in ["ready", "recovery-required", "recovered"]:
+		var observed: Variant = _port.health()
+		if observed != _status:
+			_fail()
 	return _status
 
 func snapshot() -> Dictionary:
@@ -35,17 +42,18 @@ func _valid_time(value: int) -> bool:
 func start_web() -> bool:
 	if not OS.has_feature("web"):
 		return false
-	return start(JavaScriptBridge.get_interface("littleRayCityProfilePort"))
+	return start(JavaScriptBridge.get_interface("littleRayCityProfilePort"), true)
 
 ## Port methods are synchronous; the actual browser operations are async.
-## A native test can supply an ordinary object with the same three methods.
-func start(port: Variant) -> bool:
+## Native fixtures can opt into the same read-only health contract.
+func start(port: Variant, monitor_health: bool = false) -> bool:
 	if _status != "new":
 		return false
 	if port == null:
 		_fail()
 		return false
 	_port = port
+	_monitor_health = monitor_health
 	_status = "opening"
 	if _port.begin_open() != true:
 		_fail()
@@ -65,7 +73,7 @@ func _fail() -> void:
 ## current wall time, not a duration. A new or resumed city is staged before
 ## publishing any playable state, including its offline settlement.
 func poll(observed_wall_ms: int) -> bool:
-	if _status not in ["opening", "saving", "recovering"]:
+	if status() not in ["opening", "saving", "recovering"]:
 		return false
 	var encoded: Variant = _port.take_result()
 	if not encoded is String:
@@ -176,7 +184,7 @@ func _stage(candidate: Dictionary, wall_marker_ms: int, result: Dictionary) -> b
 ## A command can be rejected by the domain while independent elapsed-time
 ## effects still require a checkpoint; inspect last_result only after ready.
 func stage_command(kind: String, argument: String, op_id: String, expected_revision: int, elapsed_ms: int, observed_wall_ms: int) -> bool:
-	if _status != "ready" or not _valid_time(elapsed_ms) or not _valid_time(observed_wall_ms):
+	if status() != "ready" or not _valid_time(elapsed_ms) or not _valid_time(observed_wall_ms):
 		return false
 	var committed: Dictionary = _boundary.committed()
 	var city = City.new()
@@ -197,7 +205,7 @@ func stage_command(kind: String, argument: String, op_id: String, expected_revis
 
 ## A timer-only checkpoint uses the same transaction and acknowledgement.
 func stage_tick(elapsed_ms: int, observed_wall_ms: int) -> bool:
-	if _status != "ready" or not _valid_time(elapsed_ms) or not _valid_time(observed_wall_ms):
+	if status() != "ready" or not _valid_time(elapsed_ms) or not _valid_time(observed_wall_ms):
 		return false
 	var committed: Dictionary = _boundary.committed()
 	var city = City.new()
@@ -230,7 +238,7 @@ static func _fits_capacity(model: Dictionary) -> bool:
 	return envelope.to_utf8_buffer().size() <= MAX_BACKUP_BYTES
 
 func export_backup() -> String:
-	if _status != "ready":
+	if status() != "ready":
 		return ""
 	var confirmed: Dictionary = _boundary.committed()
 	var encoded := JSON.stringify({"format": BACKUP_FORMAT, "version": BACKUP_VERSION,
@@ -267,7 +275,7 @@ func preview_backup(encoded: String) -> Dictionary:
 		return decoded
 	var normalized: Dictionary = decoded.model
 	var confirmation := ""
-	if _status == "ready":
+	if status() == "ready":
 		confirmation = _backup_confirmation(encoded)
 	return {"ok": true, "gold": normalized.gold, "food": normalized.food, "xp": normalized.xp,
 		"individual_count": normalized.individuals.size(), "domain_revision": normalized.revision,
@@ -284,7 +292,7 @@ func _backup_confirmation(encoded: String) -> String:
 ## marker nondecreasing. UI must resample its monotonic clock and operation IDs
 ## after a confirmed restore before accepting ordinary actions again.
 func stage_restore(encoded: String, confirmation: String, observed_wall_ms: int) -> bool:
-	if _status != "ready" or not _valid_time(observed_wall_ms):
+	if status() != "ready" or not _valid_time(observed_wall_ms):
 		return false
 	if confirmation.is_empty() or confirmation != _backup_confirmation(encoded):
 		return false
@@ -326,7 +334,7 @@ func _offer_recovery(raw: Variant) -> bool:
 	return true
 
 func preview_recovery() -> Dictionary:
-	if _status != "recovery-required" or _recovery_text.is_empty():
+	if status() != "recovery-required" or _recovery_text.is_empty():
 		return {"ok": false}
 	var prior = Commit.new(_valid_city)
 	if not prior.initialize_from_text(_recovery_text):
@@ -340,7 +348,7 @@ func preview_recovery() -> Dictionary:
 ## True means queued. Confirmation binds the exact preview to the current
 ## session; the JS writer independently compares the original raw pair.
 func stage_recovery(confirmation: String, observed_wall_ms: int) -> bool:
-	if _status != "recovery-required" or not _valid_time(observed_wall_ms):
+	if status() != "recovery-required" or not _valid_time(observed_wall_ms):
 		return false
 	if confirmation.is_empty() or confirmation != _recovery_text.sha256_text():
 		return false

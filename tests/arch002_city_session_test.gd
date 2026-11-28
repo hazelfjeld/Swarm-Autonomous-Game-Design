@@ -15,6 +15,9 @@ class FakePort:
 	var recovery_payload := ""
 	var recovery_wall := 0
 	var allow_recovery := true
+	var health_state := "ready"
+	func health() -> String:
+		return health_state
 	func begin_recovery(value: String, wall: int) -> bool:
 		recoveries += 1
 		recovery_payload = value
@@ -47,11 +50,54 @@ func _initialize() -> void:
 	_run_previous_validation()
 	_run_distinct_revision_rollback()
 	_run_recovery_choice()
-	_check(checks == 131, "all native session scenarios reached")
+	_check(checks == 131, "all original native session scenarios reached")
+	_run_idle_invalidation()
 	print(JSON.stringify({"city_profile_session": "pass" if failures.is_empty() else "fail", "checks": checks, "failures": failures}))
 	if failures.is_empty():
 		_run_large_save_probe()
 	quit(0 if failures.is_empty() else 1)
+
+# Real Godot session with a simulated idle transport health transition.
+# The separate browser fixture verifies the actual IndexedDB versionchange.
+func _run_idle_invalidation() -> void:
+	var marker := 1700000000000
+	var port := FakePort.new()
+	var session = Session.new()
+	_check(session.start(port, true), "idle health: open")
+	port.deliver({"kind":"open","ok":true,"status":"missing","active":null,"previous":null})
+	_check(session.poll(marker) and session.status() == "saving", "idle health: pending reply path unchanged")
+	port.ack()
+	_check(session.poll(marker) and session.status() == "ready", "idle health: ready acknowledged")
+	var before: Dictionary = session.snapshot()
+	var backup: String = session.export_backup()
+	var preview: Dictionary = session.preview_backup(backup)
+	_check(not backup.is_empty() and not str(preview.get("confirmation", "")).is_empty(), "idle health: healthy backup preview")
+	port.health_state = "unavailable"
+	# A direct restore attempt must detect invalidation without a frame poll.
+	_check(not session.stage_restore(backup, str(preview.get("confirmation", "")), marker) and session.status() == "unavailable", "idle health: stale restore fenced immediately")
+	_check(not session.last_result().get("ok", true) and session.snapshot() == before and port.writes == 1, "idle health: confirmed snapshot retained and no additional write")
+	_check(session.export_backup().is_empty() and str(session.preview_backup(backup).get("confirmation", "")).is_empty(), "idle health: no stale backup authorization")
+	_check(not session.stage_tick(1, marker) and not session.stage_command("feed","ray-1","idle-1",int(before.revision),0,marker), "idle health: tick and command fenced")
+	var recovery_port := FakePort.new()
+	var recovery = Session.new()
+	recovery.start(recovery_port, true)
+	var prior := JSON.stringify({"storage_revision":2,"wall_marker_ms":marker,"model":before})
+	recovery_port.health_state = "recovery-required"
+	recovery_port.deliver({"kind":"open","ok":false,"status":"recovery-required","previous":prior})
+	_check(recovery.poll(marker) and recovery.status() == "recovery-required", "idle health: healthy recovery preview")
+	var recovery_preview: Dictionary = recovery.preview_recovery()
+	recovery_port.health_state = "unavailable"
+	_check(not recovery.stage_recovery(str(recovery_preview.get("confirmation", "")), marker) and recovery.status() == "unavailable", "idle health: stale recovery confirmation fenced")
+	_check(not recovery.preview_recovery().get("ok", true) and recovery_port.recoveries == 0 and recovery.snapshot().is_empty(), "idle health: recovery bytes not published")
+	var frame_port := FakePort.new()
+	var frame = Session.new()
+	frame.start(frame_port, true)
+	frame_port.deliver({"kind":"open","ok":true,"status":"missing","active":null,"previous":null})
+	frame.poll(marker)
+	frame_port.ack()
+	frame.poll(marker)
+	frame_port.health_state = "unavailable"
+	_check(not frame.poll(marker) and frame.status() == "unavailable" and frame_port.writes == 1, "idle health: frame poll notices loss without a mailbox reply")
 
 func _run() -> void:
 	var marker := 1700000000000

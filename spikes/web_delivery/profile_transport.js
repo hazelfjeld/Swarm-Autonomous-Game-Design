@@ -429,6 +429,12 @@ export function createGodotProfilePort(openSession) {
       }).catch(() => fail("recovery"));
       return true;
     },
+    // Read-only liveness check for a reply already consumed by Godot.
+    // Pending replies still belong to take_result(); never drain the mailbox here.
+    health() {
+      return ["ready", "recovery-required", "recovered"].includes(state) &&
+        session?.status !== state ? "unavailable" : state;
+    },
     take_result() {
       if (state !== "result") return "";
       // A versionchange can fence the writer after its reply is queued.

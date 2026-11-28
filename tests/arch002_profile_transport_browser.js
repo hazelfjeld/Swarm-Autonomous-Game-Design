@@ -397,8 +397,9 @@ globalThis.__arch002TransportProgress = {passed: 0, last_passed: null};
       tx.oncomplete = () => resolve(requests.map(q => q.result));
       tx.onerror = tx.onabort = reject;
     });
+    for (const timing of ["queued", "consumed"]) {
     for (const mode of ["missing", "ready", "write", "preview", "recovery"]) {
-      const fixtureName = name + "-queued-" + mode;
+      const fixtureName = name + "-" + timing + "-" + mode;
       const recoveringMode = mode === "preview" || mode === "recovery";
       if (mode === "ready" || recoveringMode) {
         const seed = await versionedDb(fixtureName, 1);
@@ -443,19 +444,33 @@ globalThis.__arch002TransportProgress = {passed: 0, last_passed: null};
       }
       const expectedStatus = mode === "recovery" ? "recovered" :
         mode === "preview" ? "recovery-required" : "ready";
-      check(owner.status === expectedStatus, "queued " + mode + " session initially valid");
+      check(owner.status === expectedStatus, timing + " " + mode + " session initially valid");
+      const expectedKind = mode === "recovery" ? "recovery" : mode === "write" ? "write" : "open";
+      if (timing === "consumed") {
+        const reply = await awaitMessage(port);
+        check(reply.kind === expectedKind &&
+          (mode === "preview" ? reply.ok === false && reply.status === "recovery-required" : reply.ok === true) &&
+          port.health() === expectedStatus && port.take_result() === "",
+          "consumed " + mode + " healthy reply and idle health");
+      }
       // Opening version 2 invokes the real session onversionchange handler,
       // which closes its connection. Success confirms the upgrade completed.
       const upgraded = await versionedDb(fixtureName, 2);
       try {
-        check(owner.status === "unavailable", "versionchange fences queued " + mode);
-        const reply = JSON.parse(port.take_result());
-        const expectedKind = mode === "recovery" ? "recovery" : mode === "write" ? "write" : "open";
-        check(reply.kind === expectedKind && reply.ok === false &&
-          reply.status === "unavailable" && Object.keys(reply).length === 3 &&
-          port.take_result() === "" && !port.begin_write(b) &&
-          !port.begin_recovery(a, 200) && !(await port.close()),
-          "invalidated queued " + mode + " reply fails closed exactly once");
+        check(owner.status === "unavailable", "versionchange fences " + timing + " " + mode);
+        if (timing === "queued") {
+          const reply = JSON.parse(port.take_result());
+          check(reply.kind === expectedKind && reply.ok === false &&
+            reply.status === "unavailable" && Object.keys(reply).length === 3 &&
+            port.take_result() === "" && !port.begin_write(b) &&
+            !port.begin_recovery(a, 200) && !(await port.close()),
+            "invalidated queued " + mode + " reply fails closed exactly once");
+        } else {
+          check(port.health() === "unavailable" && port.health() === "unavailable" &&
+            port.take_result() === "" && !port.begin_write(b) &&
+            !port.begin_recovery(a, 200) && !(await port.close()),
+            "invalidated consumed " + mode + " health fails closed without a new mailbox reply");
+        }
         const [active, previous, archive] = await rawRecords(upgraded);
         const expectedActive = mode === "recovery" ? payload(2, 240, 200) :
           mode === "preview" ? "unreadable" : mode === "missing" ? undefined : a;
@@ -465,12 +480,13 @@ globalThis.__arch002TransportProgress = {passed: 0, last_passed: null};
           active: "unreadable", previous: a
         }) : undefined;
         check(active === expectedActive && previous === expectedPrevious && archive === expectedArchive,
-          "queued " + mode + " invalidation preserves exact durable records");
+          timing + " " + mode + " invalidation preserves exact durable records");
         const followerDenied = await navigator.locks.request("little-ray-profile:" + fixtureName,
           {mode: "exclusive", ifAvailable: true}, lock => !lock);
-        check(followerDenied, "invalidated queued " + mode + " retains writer fence");
+        check(followerDenied, "invalidated " + timing + " " + mode + " retains writer fence");
       } finally { upgraded.close(); }
       // The fenced session deliberately retains its writer until page teardown.
+    }
     }
 
     return {profile_transport: "pass", checks, actual_site_verified: false};

@@ -830,7 +830,7 @@ jobs:
                   (evidence / "profile-transport-observation.json").write_text(json.dumps(transport_result, indent=2))
                   print(json.dumps(transport_result), flush=True)
                   assert transport_result.get("profile_transport") == "pass", transport_result
-                  assert len(transport_result.get("checks", [])) == 123, transport_result
+                  assert len(transport_result.get("checks", [])) == 153, transport_result
                   api("DELETE", session)
                   session = None
           finally:
@@ -1201,6 +1201,12 @@ jobs:
               # Accept a request during a save, but open only after acknowledgement.
               backup_button.disabled = backup_open_pending or phase not in ["ready", "saving"] or not city.profile_confirmed or city.profile_view_invalid
               if not restore_pending:
+                  if backup_panel.visible and phase != "ready":
+                      backup_confirmation = ""
+                      backup_restore.disabled = true
+                      backup_export.disabled = true
+                      backup_preview.disabled = true
+                      backup_message.text = "Save unavailable. Close and reload to reconcile."
                   return
               # Use the existing city acknowledgement path while ordinary city input
               # and auto-checkpointing are suspended. Do not publish speculative state.

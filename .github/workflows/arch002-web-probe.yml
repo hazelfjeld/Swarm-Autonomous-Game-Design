@@ -954,6 +954,8 @@ jobs:
           var restore_pending: bool = false
           var recovery_panel: ColorRect
           var recovery_message: Label
+          var recovery_body: ScrollContainer
+          var recovery_stack: VBoxContainer
           var recovery_confirm: Button
           var recovery_reload: Button
           var recovery_confirmation: String = ""
@@ -1254,6 +1256,18 @@ jobs:
               recovery_reload.add_theme_font_size_override("font_size", 21)
               recovery_reload.pressed.connect(reload_recovery)
               recovery_panel.add_child(recovery_reload)
+              # Keep the entire warning scrollable, never behind the fixed actions.
+              recovery_body = ScrollContainer.new()
+              recovery_body.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+              recovery_body.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+              recovery_body.focus_mode = Control.FOCUS_ALL
+              recovery_body.follow_focus = true
+              recovery_panel.add_child(recovery_body)
+              recovery_stack = VBoxContainer.new()
+              recovery_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+              recovery_stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
+              recovery_body.add_child(recovery_stack)
+              recovery_body.hide()
               recovery_panel.hide()
 
 
@@ -1276,6 +1290,15 @@ jobs:
                   control.size_flags_horizontal = Control.SIZE_FILL
                   control.size_flags_vertical = Control.SIZE_FILL
               backup_body.visible = compact
+
+          func use_recovery_body(compact: bool) -> void:
+              var target: Node = recovery_stack if compact else recovery_panel
+              if recovery_message.get_parent() != target:
+                  recovery_message.reparent(target, false)
+              recovery_message.custom_minimum_size = Vector2.ZERO
+              recovery_message.size_flags_horizontal = Control.SIZE_FILL
+              recovery_message.size_flags_vertical = Control.SIZE_FILL
+              recovery_body.visible = compact
 
           func invalidate_integration_layout() -> void:
               integration_layout_key = ""
@@ -1311,6 +1334,7 @@ jobs:
               var h: float = viewport.y
               var actions: Array[Button] = [backup_export, backup_preview, backup_restore, backup_close]
               use_backup_body(compact)
+              use_recovery_body(compact)
               if not compact:
                   backup_button.text = "City backup / restore"
                   backup_button.clip_text = false
@@ -1370,7 +1394,7 @@ jobs:
               var recovery_rows: int = 1 if w >= 580.0 else 2
               var recovery_top: float = h - 8.0 - (48.0 * recovery_rows + 8.0 * (recovery_rows - 1))
               recovery_message.add_theme_font_size_override("font_size", 16)
-              place_control(recovery_message, 8, 46, w, recovery_top - 54.0)
+              place_control(recovery_body, 8, 46, w, maxf(1.0, recovery_top - 54.0))
               recovery_confirm.add_theme_font_size_override("font_size", 16)
               recovery_reload.add_theme_font_size_override("font_size", 16)
               if recovery_rows == 1:
@@ -1410,6 +1434,7 @@ jobs:
                       recovery_confirmation = str(preview.confirmation)
                       recovery_message.text = "The latest save is damaged. A validated earlier city is available.\n\n%d Gold · %d Food · %d XP · %d rays\nSaved revision %d\n\nRestoring may lose newer progress. The original damaged records will be archived. No changes occur until you confirm." % [preview.gold, preview.food, preview.xp, preview.individual_count, preview.domain_revision]
                       recovery_panel.show()
+                      recovery_body.scroll_vertical = 0
                       recovery_reload.grab_focus()
                   recovery_confirm.disabled = recovery_confirmation.is_empty()
                   recovery_reload.disabled = false
@@ -1461,6 +1486,7 @@ jobs:
                   "viewport_size": [city.size.x, city.size.y], "compact_page": city.compact_page,
                   "book_scroll_offset": city.compact_scroll.scroll_vertical,
                   "backup_scroll_offset": backup_body.scroll_vertical,
+                  "recovery_scroll_offset": recovery_body.scroll_vertical,
                   "layout_controls": {"book_tab": control_geometry(city.compact_nav[6]),
                       "collection": control_geometry(city.collection_button), "favorite": control_geometry(city.favorite_button),
                       "sale": control_geometry(city.sell_button), "backup": control_geometry(backup_button),
@@ -1472,6 +1498,7 @@ jobs:
                       "export": control_geometry(backup_export), "preview": control_geometry(backup_preview),
                       "restore": control_geometry(backup_restore), "close": control_geometry(backup_close),
                       "recovery_heading": control_geometry(recovery_heading), "recovery_message": control_geometry(recovery_message),
+                      "recovery_body": control_geometry(recovery_body),
                       "recover": control_geometry(recovery_confirm), "reload": control_geometry(recovery_reload)}})
           GD
           cat > "$project/arch002_city_entry.tscn" <<'SCENE'
@@ -1706,22 +1733,29 @@ jobs:
               x,y,w,h = outer
               xx,yy,ww,hh = inner
               return xx >= x-.01 and yy >= y-.01 and xx+ww <= x+w+.01 and yy+hh <= y+h+.01
-          def compact_reveal(name, pane, offset_key):
+          def compact_reveal(name, pane, offset_key, edge=None):
               # Real browser wheel; never write an engine scroll offset.
               for attempt in range(32):
                   v = view()
                   target, clip = (v["layout_controls"][k] for k in (name,pane))
                   assert target["visible"] and clip["visible"], (name, target, clip)
-                  if encloses(clip["rect"], target["rect"]):
-                      return v
                   x,y,w,h = clip["rect"]
                   tx,ty,tw,th = target["rect"]
-                  assert th <= h+.01, (name, target, clip)
-                  delta = 64 if ty+th > y+h else -64
+                  if edge is None:
+                      if encloses(clip["rect"], target["rect"]):
+                          return v
+                      assert th <= h+.01, (name, target, clip)
+                      delta = 64 if ty+th > y+h else -64
+                  else:
+                      assert edge in ("start","end") and tx >= x-.01 and tx+tw <= x+w+.01, (edge,target,clip)
+                      point = ty if edge == "start" else ty+th
+                      if y-.01 <= point <= y+h+.01 and ty < y+h and ty+th > y:
+                          return v
+                      delta = 64 if point > y+h else -64
                   b = bounds()
                   vw,vh = v["viewport_size"]
                   # Move first so Godot's cached hover reflects the wheel point.
-                  px = round(b["x"]+b["width"]*(x+(w/2 if pane=="book_scroll" else w-12))/vw)
+                  px = round(b["x"]+b["width"]*(x+(w/2 if pane in ("book_scroll","recovery_body") else w-12))/vw)
                   py = round(b["y"]+b["height"]*(y+h/2)/vh)
                   api("POST", session+"/actions", {"actions":[{"type":"pointer","id":"mouse","parameters":{"pointerType":"mouse"},"actions":[
                       {"type":"pointerMove","duration":80,"origin":"viewport","x":px,"y":py}]}]})
@@ -2087,8 +2121,27 @@ jobs:
                       wait(bounds, "compact corrupt loader "+tag)
                       wait(recoverable_city, "compact explicit recovery "+tag)
                       assert raw_city_pair()["observed"] == raw
-                      recovery_rects = compact_geometry(["recovery_heading","recovery_message","recover","reload"], ["recover","reload"])
+                      recovery_rects = compact_geometry(["recovery_heading","recovery_body","recover","reload"], ["recover","reload"])
+                      # A long warning may exceed the available body height.
+                      # Verify real wheel access to both ends, not merely clipping.
+                      warning = view()["recovery_message"]
+                      assert "Restoring may lose newer progress" in warning and "original damaged records will be archived" in warning and "No changes occur until you confirm." in warning, warning
+                      top = compact_reveal("recovery_message","recovery_body","recovery_scroll_offset","start")
                       capture("compact-"+tag+"-recovery-preview")
+                      bottom = compact_reveal("recovery_message","recovery_body","recovery_scroll_offset","end")
+                      message = bottom["layout_controls"]["recovery_message"]
+                      clip = bottom["layout_controls"]["recovery_body"]
+                      assert message["rect"][3] >= message["minimum"][1]-.01, (message,clip)
+                      if message["rect"][3] > clip["rect"][3]+.01:
+                          assert bottom["recovery_scroll_offset"] > top["recovery_scroll_offset"], (top,bottom)
+                      else:
+                          assert encloses(clip["rect"],message["rect"]), (message,clip)
+                      recovery_rects["message_start"] = top["layout_controls"]["recovery_message"]["rect"]
+                      recovery_rects["message_end"] = message["rect"]
+                      recovery_rects["scroll_offsets"] = [top["recovery_scroll_offset"],bottom["recovery_scroll_offset"]]
+                      assert compact_geometry(["recovery_heading","recovery_body","recover","reload"], ["recover","reload"]) == {k: recovery_rects[k] for k in ("recovery_heading","recovery_body","recover","reload")}
+                      assert raw_city_pair()["observed"] == raw, "scrolling changed the damaged records"
+                      capture("compact-"+tag+"-recovery-warning-end")
                       compact_click("recover")
                       wait(recovered_city, "compact recovery acknowledged "+tag)
                       restored_compact = raw_city_pair()

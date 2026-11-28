@@ -881,6 +881,37 @@ jobs:
           printf 'Architect source %s; city source %s\n' "$(git rev-parse HEAD)" "$(git -C .arch002-city-source rev-parse HEAD)"
           timeout 90s "$editor" --headless --path "$project" --script res://arch002_city_bridge.gd
           timeout 90s "$editor" --headless --path "$project" --script res://arch002_city_session_test.gd
+          # Generate a real large domain snapshot with the same command path as
+          # the native capacity regression. Test-only data, never player data.
+          cat > "$project/arch002_large_browser_fixture.gd" <<'GD'
+          extends SceneTree
+          const City = preload("res://city_model.gd")
+          func _initialize() -> void:
+              var city = City.new()
+              for i in range(1, 13001):
+                  var argument := "ray-1,1" if i % 2 == 1 else "ray-1,0"
+                  var result: Dictionary = city.command("set_favorite", argument, "ui-" + str(i), city.revision)
+                  if not result.ok:
+                      push_error("Large fixture command failed: " + str(i))
+                      quit(1)
+                      return
+              var model: Dictionary = city.snapshot()
+              if not City.validate_snapshot(model) or model.receipts.size() != 13000:
+                  push_error("Large fixture validation failed")
+                  quit(1)
+                  return
+              var encoded := JSON.stringify(model, "", true, true)
+              var file := FileAccess.open(OS.get_environment("RUNNER_TEMP").path_join("arch002-large-model.json"), FileAccess.WRITE)
+              if file == null or encoded.to_utf8_buffer().size() <= 1048576:
+                  push_error("Large fixture unavailable or below original limit")
+                  quit(1)
+                  return
+              file.store_string(encoded)
+              file.close()
+              quit(0)
+          GD
+          timeout 90s "$editor" --headless --path "$project" --script res://arch002_large_browser_fixture.gd
+          rm "$project/arch002_large_browser_fixture.gd"
 
       - name: Export combined acknowledged city (isolated candidate)
         timeout-minutes: 4
@@ -1401,7 +1432,7 @@ jobs:
               "sha256": files, "actual_site_verified": False}, indent=2))
           PY
       - name: Exercise real city controls and reload in Chromium
-        timeout-minutes: 8
+        timeout-minutes: 12
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -1909,6 +1940,103 @@ jobs:
                       "actual_site_verified":False}
                   (evidence/"observation.json").write_text(json.dumps(report, indent=2))
                   print(json.dumps({"persistent_city":"pass","checks":report["checks"],"actual_site_verified":False}), flush=True)
+                  # Separate disposable desktop profile, after the existing ordinary
+                  # and compact scenarios. Seed only after unloading the live writer.
+                  # The seed comes from 13,000 real native domain commands, not a
+                  # claimed 13,000 browser clicks. Exercise the actual browser
+                  # transport and visible export/preview/confirm/recovery controls.
+                  api("DELETE", session)
+                  session = None
+                  large_profile = pathlib.Path(compact_profiles) / "large-capacity"
+                  large_profile.mkdir()
+                  large_opened = api("POST", "/session", {"capabilities":{"alwaysMatch":{"browserName":"chrome",
+                      "goog:chromeOptions":{"args":["--headless=new","--window-size=1200,1000",
+                          "--disable-dev-shm-usage","--user-data-dir="+str(large_profile)]}}}})
+                  session = "/session/" + large_opened["sessionId"]
+                  api("POST", session + "/timeouts", {"script":30000,"pageLoad":30000})
+                  api("POST", session + "/goog/cdp/execute", {"cmd":"Emulation.setDeviceMetricsOverride",
+                      "params":{"width":1100,"height":880,"deviceScaleFactor":1,"mobile":False}})
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "large profile initial loader")
+                  observe(lambda m: m["gold"] == 1200 and m["food"] == 240, "large profile fresh city")
+                  click("feed", 830, 363)
+                  observe(lambda m: m["food"] == 235, "large profile initial previous-good")
+                  api("POST", session + "/url", {"url":inert_url})
+                  assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                  initial_pair = raw_city_pair()
+                  assert not initial_pair["archivePresent"]
+                  fixture = json.loads((root.parent/"arch002-large-model.json").read_text())
+                  assert len(fixture["receipts"]) == 13000
+                  marker = int(time.time()*1000)
+                  seed = {key:json.dumps({"storage_revision":revision,"wall_marker_ms":marker,"model":fixture},
+                      separators=(",",":"),ensure_ascii=False) for key, revision in (("previous",1),("active",2))}
+                  seed_bytes = len(seed["active"].encode("utf-8"))
+                  assert 1048576 < seed_bytes < 4194304, seed_bytes
+                  raw_city_pair(replacement=seed)
+                  assert raw_city_pair()["observed"] == seed
+                  large_times = {}
+                  started = time.monotonic()
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "large city loader")
+                  wait(lambda: ready("backup"), "large city acknowledged")
+                  large_times["load_and_ack_seconds"] = time.monotonic()-started
+                  large_initial = saved()["active"]
+                  assert large_initial["model"]["receipts"] == fixture["receipts"]
+                  click("backup", 930, 629)
+                  wait(lambda: view()["backup_open"], "large backup opened")
+                  started = time.monotonic()
+                  modal_click(200, 705)
+                  wait(lambda: view()["backup_message"].startswith("Confirmed backup exported"), "large export to text")
+                  large_times["export_seconds"] = time.monotonic()-started
+                  before_large_restore = saved()["active"]
+                  started = time.monotonic()
+                  modal_click(430, 705)
+                  wait(lambda: not view()["backup_restore_disabled"] and view()["backup_message"].startswith("Replace current city"), "large preview")
+                  large_times["preview_seconds"] = time.monotonic()-started
+                  assert saved()["active"] == before_large_restore
+                  started = time.monotonic()
+                  modal_click(660, 705)
+                  wait(lambda: view()["backup_message"] == "Backup restored." and view()["phase"] == "ready", "large confirmed replacement")
+                  large_times["restore_seconds"] = time.monotonic()-started
+                  large_replaced = saved()
+                  assert large_replaced["previous"] == before_large_restore
+                  assert large_replaced["active"]["storage_revision"] == before_large_restore["storage_revision"] + 1
+                  assert large_replaced["active"]["model"]["receipts"] == fixture["receipts"]
+                  capture("large-backup-confirmed")
+                  api("POST", session + "/url", {"url":inert_url})
+                  assert js("return location.pathname === '/integration-manifest.json' && !window.littleRayCityProfilePort")
+                  large_fault = raw_city_pair(True)
+                  assert not large_fault["archivePresent"]
+                  large_corrupt = large_fault["observed"]
+                  assert len(large_corrupt["previous"].encode("utf-8")) > 1048576
+                  api("POST", session + "/url", {"url":url})
+                  wait(bounds, "large corrupt loader")
+                  wait(recoverable_city, "large previous copy offered")
+                  assert raw_city_pair()["observed"] == large_corrupt
+                  capture("large-recovery-preview")
+                  started = time.monotonic()
+                  modal_click(300, 685)
+                  wait(recovered_city, "large recovery acknowledged")
+                  large_times["recover_seconds"] = time.monotonic()-started
+                  large_recovery = raw_city_pair()
+                  selected_large = json.loads(large_corrupt["previous"])
+                  expected_large = dict(selected_large["model"])
+                  expected_large["revision"] += 1
+                  assert json.loads(large_recovery["observed"]["active"])["model"] == expected_large
+                  assert large_recovery["observed"]["previous"] == large_corrupt["previous"]
+                  assert json.loads(large_recovery["archive"]) == {"version":1,"activePresent":True,"previousPresent":True,**large_corrupt}
+                  modal_click(800, 685)
+                  wait(bounds, "large recovery reload")
+                  wait(lambda: ready("backup"), "large recovery reopened")
+                  assert saved()["active"]["model"]["receipts"] == fixture["receipts"]
+                  assert raw_city_pair()["archive"] == large_recovery["archive"]
+                  capture("large-recovery-reloaded")
+                  large_report = {"large_city_browser":"pass","seed_bytes":seed_bytes,"receipts":13000,
+                      "seeded_native_fixture":True,"preview_preserved":True,"restored":True,
+                      "archive_preserved":True,"reopened":True,"elapsed_seconds":large_times,
+                      "actual_site_verified":False}
+                  (evidence/"large-city-browser.json").write_text(json.dumps(large_report,indent=2))
+                  print(json.dumps(large_report), flush=True)
           except Exception as error:
               if session:
                   try:

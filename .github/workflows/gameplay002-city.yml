@@ -148,9 +148,17 @@ jobs:
           \t\tvar rect: Rect2 = transform * Rect2(Vector2.ZERO, compact_scroll.size)
           \t\tvar bar: VScrollBar = compact_scroll.get_v_scroll_bar()
           \t\tscroll = {"x": rect.position.x, "y": rect.position.y, "w": rect.size.x, "h": rect.size.y, "offset": compact_scroll.scroll_vertical, "min": bar.min_value, "max": bar.max_value, "page": bar.page, "value": bar.value, "content_height": compact_scroll_content.size.y, "minimum_height": compact_scroll_content.custom_minimum_size.y}
+          \tvar map_markers: Dictionary = {}
+          \tif not compact_mode or compact_page == 0:
+          \t\tvar transform: Transform2D = get_viewport().get_screen_transform() * get_global_transform_with_canvas()
+          \t\tvar targets := gold_marker_targets()
+          \t\tfor id in targets:
+          \t\t\tvar target: Rect2 = targets[id]
+          \t\t\tvar rect: Rect2 = transform * target
+          \t\t\tmap_markers[id] = {"x":rect.position.x,"y":rect.position.y,"w":rect.size.x,"h":rect.size.y}
           \tvar window_size := get_window().size
           \tvar crop_active: bool = not city.farm_crop("farm-1").is_empty()
-          \tvar report := {"window": [window_size.x, window_size.y], "controls": rows, "gold": city.gold, "food": city.food, "crop_active": crop_active, "crop_ready": crop_active and city.remaining_seconds("farm-1") == 0, "sample_disabled": sample_button.disabled, "compact": compact_mode, "page": compact_page, "nav": nav, "messages": messages, "scroll": scroll, "wheel_count": compact_probe_wheel_count, "last_wheel": compact_probe_last_wheel}
+          \tvar report := {"window": [window_size.x, window_size.y], "controls": rows, "gold": city.gold, "food": city.food, "crop_active": crop_active, "crop_ready": crop_active and city.remaining_seconds("farm-1") == 0, "sample_disabled": sample_button.disabled, "compact": compact_mode, "page": compact_page, "nav": nav, "messages": messages, "scroll": scroll, "wheel_count": compact_probe_wheel_count, "last_wheel": compact_probe_last_wheel, "map_markers": map_markers, "tide_bin": city.stored_gold("tide-1"), "revision": city.revision}
           \tJavaScriptBridge.eval("window.cityCompactProbe = " + JSON.stringify(report))
           """
           p.write_text(s)
@@ -424,6 +432,28 @@ jobs:
                               case["sample_click"] = "passed"
                           except AssertionError:
                               case["sample_click"] = "failed"
+                      # Ordinary browser pointer input on the exact rendered Gold target.
+                      frame = wait(lambda: (v if (v := observe()) and v["probe"]["tide_bin"] > 0
+                                            and "tide-1" in v["probe"]["map_markers"] else None),
+                                   "visible starter Gold marker " + label, 25)
+                      marker = css_rect(frame["probe"]["map_markers"]["tide-1"], frame)
+                      case["map_marker"] = {"rect":marker,"before_gold":frame["probe"]["gold"],
+                                             "before_revision":frame["probe"]["revision"],
+                                             "before_bin":frame["probe"]["tide_bin"],"result":"pending"}
+                      retain()
+                      assert not failures(marker, frame), "Gold map marker undersized/clipped " + label
+                      for key, raw in frame["probe"]["controls"].items():
+                          if raw["visible"]:
+                              assert not intersects(marker, css_rect(raw, frame)), "Gold map marker overlaps " + key
+                      (evidence / (label + "-gold-marker.png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+                      click_rect(marker)
+                      previous = frame["probe"]
+                      frame = wait(lambda: (v if (v := observe()) and v["probe"]["gold"] > previous["gold"]
+                                            and v["probe"]["revision"] == previous["revision"] + 1 else None),
+                                   "direct map Gold collection " + label, 5)
+                      case["map_marker"].update({"result":"passed","after_gold":frame["probe"]["gold"],
+                                                  "after_revision":frame["probe"]["revision"]})
+                      retain()
                       if short_case:
                           # Ordinary one-minute crop: no injected clock or free Food.
                           frame = wait(lambda: (v if (v := observe()) and v["probe"]["crop_ready"] else None), "short real-time crop readiness", 75)

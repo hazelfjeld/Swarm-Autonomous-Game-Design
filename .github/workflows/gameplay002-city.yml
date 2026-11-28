@@ -433,9 +433,27 @@ jobs:
                           except AssertionError:
                               case["sample_click"] = "failed"
                       # Ordinary browser pointer input on the exact rendered Gold target.
-                      frame = wait(lambda: (v if (v := observe()) and v["probe"]["tide_bin"] > 0
-                                            and "tide-1" in v["probe"]["map_markers"] else None),
-                                   "visible starter Gold marker " + label, 25)
+                      # A level-one Common earns 2 Gold/min: first whole Gold at 30s.
+                      # Allow 15s additional scheduling slack; do not alter the clock or rate.
+                      case["map_marker_wait"] = {"timeout_s":45,"result":"pending","last":None}
+                      def marker_ready():
+                          v = observe()
+                          if not v:
+                              return None
+                          p = v["probe"]
+                          case["map_marker_wait"]["last"] = {"tide_bin":p["tide_bin"],
+                              "map_markers":p["map_markers"],"page":p["page"],"gold":p["gold"],
+                              "revision":p["revision"]}
+                          return v if p["tide_bin"] > 0 and "tide-1" in p["map_markers"] else None
+                      try:
+                          frame = wait(marker_ready, "visible starter Gold marker " + label, 45)
+                      except AssertionError:
+                          case["map_marker_wait"]["result"] = "timeout"
+                          retain()
+                          (evidence / (label + "-gold-marker-timeout.png")).write_bytes(base64.b64decode(api("GET", session + "/screenshot")))
+                          raise
+                      case["map_marker_wait"]["result"] = "ready"
+                      retain()
                       marker = css_rect(frame["probe"]["map_markers"]["tide-1"], frame)
                       case["map_marker"] = {"rect":marker,"before_gold":frame["probe"]["gold"],
                                              "before_revision":frame["probe"]["revision"],

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "role": "director",
-  "generation": 160,
-  "run_id": null,
-  "acquired_at": null,
-  "expires_at": null
+  "generation": 161,
+  "run_id": "director-mountain-mover-20261128T0244Z-nowrap-package",
+  "acquired_at": "2026-11-28T02:44:25.179Z",
+  "expires_at": "2026-11-28T03:14:25.179Z"
 }
